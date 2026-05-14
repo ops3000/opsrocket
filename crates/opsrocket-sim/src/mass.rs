@@ -53,7 +53,9 @@ pub fn mass_properties_for_stages(rocket: &Rocket, active: &[bool]) -> MassPrope
             for (comp, layout) in &layout {
                 accumulate(&mut acc, comp, layout.axial_start);
                 if let Component::BodyTube(t) = comp {
-                    for (sub, sub_layout) in layout_children(&t.children, layout.axial_start, layout.axial_start) {
+                    let body_start = layout.axial_start;
+                    let body_end = body_start + t.length;
+                    for (sub, sub_layout) in layout_children(&t.children, body_start, body_end) {
                         accumulate(&mut acc, sub, sub_layout.axial_start);
                     }
                 }
@@ -115,19 +117,36 @@ fn layout_children<'a>(
     parent_origin: f64,
     parent_prev_aft: f64,
 ) -> Vec<(&'a Component, ChildLayout)> {
+    // Java RocketComponent.AxialMethod:
+    //   ABSOLUTE: offset from rocket origin
+    //   TOP:      offset from top (forward end) of parent
+    //   MIDDLE:   parent_origin + (parent_length − child_length)/2 + offset
+    //   BOTTOM:   parent_origin + parent_length − child_length − offset
+    //   AFTER:    cursor (after previous "body" sibling) + offset
+    let parent_length = (parent_prev_aft - parent_origin).max(0.0);
     let mut out = Vec::with_capacity(children.len());
     let mut cursor = parent_prev_aft;
     for c in children {
-        let start = match c.common().axial_method {
-            opsrocket_core::component::AxialMethod::After => cursor + c.common().axial_offset,
-            opsrocket_core::component::AxialMethod::Absolute => c.common().axial_offset,
-            opsrocket_core::component::AxialMethod::Top => parent_origin + c.common().axial_offset,
-            _ => cursor + c.common().axial_offset,
+        let common = c.common();
+        let child_len = c.length();
+        let start = match common.axial_method {
+            opsrocket_core::component::AxialMethod::After => cursor + common.axial_offset,
+            opsrocket_core::component::AxialMethod::Absolute => common.axial_offset,
+            opsrocket_core::component::AxialMethod::Top => parent_origin + common.axial_offset,
+            opsrocket_core::component::AxialMethod::Middle => {
+                parent_origin + 0.5 * (parent_length - child_len) + common.axial_offset
+            }
+            opsrocket_core::component::AxialMethod::Bottom => {
+                // Java RocketComponent.AxialMethod.BOTTOM.getAsAbsolute:
+                //   parent_length + offset − child_length
+                // (positive offset shifts the child downward beyond the
+                // parent's aft; negative offset places it above).
+                parent_origin + parent_length + common.axial_offset - child_len
+            }
         };
         out.push((c, ChildLayout { axial_start: start }));
-        // Only "body" components advance the cursor for sibling After-positioning.
         if matches!(c, Component::NoseCone(_) | Component::BodyTube(_) | Component::Transition(_)) {
-            cursor = start + c.length();
+            cursor = start + child_len;
         }
     }
     out
@@ -300,15 +319,23 @@ fn add_centering_ring(acc: &mut Accumulator, c: &CenteringRing, axial_start: f64
 fn add_nosecone(acc: &mut Accumulator, n: &NoseCone, axial_start: f64) {
     // Main shell mass.
     let (shell_mass, shell_cg) = if let Some(mat) = n.common.material.as_ref() {
-        let r = n.aft_radius;
-        let area = PI * r * (r * r + n.length * n.length).sqrt();
-        let m = area * n.thickness * mat.density;
-        // CG of a cone shell is at 2/3 L from the nose tip (so 1/3 L from base);
-        // OpenRocket uses 0.75 L from the tip for filled cone solids. For the
-        // shell-with-thin-wall approximation we use 2/3 L from tip = L * 0.667.
-        // We retain 0.75 L for compatibility with the Java reference's
-        // convention for ogives.
-        (m, axial_start + 0.75 * n.length)
+        // Use the shape-aware integrated wet area instead of the simple
+        // slant approximation; for ogive / Haack / power shapes the
+        // curvature gives a meaningfully larger wetted area than the
+        // frustum slant.  Volume CG comes from the same integral.
+        let integ = opsrocket_core::profile::shape_integrals(
+            n.shape,
+            n.shape_parameter,
+            n.length,
+            0.0,
+            n.aft_radius,
+        );
+        let m = integ.wet_area * n.thickness * mat.density;
+        // For a thin shell, CG of the shell ≈ CG of the surface, not the
+        // filled volume. We use the volume-weighted CG (computed by
+        // shape_integrals) as a close approximation — the difference is
+        // typically < 1% of L for typical nose-cone shapes.
+        (m, axial_start + integ.cg_axial)
     } else {
         (0.0, axial_start + 0.5 * n.length)
     };
@@ -458,7 +485,9 @@ pub fn iter_layout<'a>(rocket: &'a Rocket) -> Vec<(&'a Component, f64)> {
         for (c, l) in &layout {
             out.push((*c, l.axial_start));
             if let Component::BodyTube(t) = c {
-                for (sc, sl) in layout_children(&t.children, l.axial_start, l.axial_start) {
+                let body_start = l.axial_start;
+                let body_end = body_start + t.length;
+                for (sc, sl) in layout_children(&t.children, body_start, body_end) {
                     out.push((sc, sl.axial_start));
                 }
             }

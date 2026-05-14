@@ -70,25 +70,29 @@ impl State {
 }
 
 /// External forces & masses sampled at a single time-step.
+///
+/// The aero block carries both the slender-body Barrowman result (linear in
+/// α) AND the Galejs body-lift "planform" term (sin²α). At zero AOA only
+/// the slender part contributes; off-axis flight pulls in body lift, which
+/// adds normal force, lift, and α-induced drag in the dynamics.
 pub struct ForceSampler<'a> {
     pub atmosphere: &'a dyn AtmosphereModel,
     /// Wind velocity vector (m/s) in world frame.
     pub wind: Vec3,
     /// Function returning thrust magnitude (N) along the body axis.
     pub thrust: &'a dyn Fn(f64) -> f64,
-    /// Drag coefficient (assumed constant per-step here).
+    /// Axial drag coefficient (referenced to area_ref), excluding any
+    /// AOA-induced contribution which is added below.
     pub cd: f64,
     /// Reference area (m²).
     pub area_ref: f64,
     /// Mass derivative (kg/s, negative while motor burns).
     pub mass_dot: &'a dyn Fn(f64) -> f64,
-    /// CN_alpha (normal-force coefficient slope, 1/rad).  Used to produce
-    /// a pitching moment when angle of attack > 0.  If zero, the rocket is
-    /// effectively neutral and angular dynamics decay only through damping.
+    /// CN_alpha (slender-body slope at α=0, 1/rad, referenced to area_ref).
     pub cn_alpha: f64,
     /// Reference length used for the moment arm (m).
     pub reference_length: f64,
-    /// Axial offset of CP from rocket origin (m).
+    /// Slender-body CP from rocket origin (m).
     pub cp_axial: f64,
     /// Axial offset of CG from rocket origin (m).
     pub cg_axial: f64,
@@ -96,6 +100,13 @@ pub struct ForceSampler<'a> {
     pub moment_of_inertia_rot: f64,
     /// Longitudinal (roll) moment of inertia (kg·m²).
     pub moment_of_inertia_long: f64,
+    /// Body-lift Galejs "planform term": `K · ΣA_planform / A_ref` (per
+    /// component summed), constant for the rocket geometry.  Multiplied by
+    /// `sin²(α)` to get the body-lift contribution to CN.
+    pub body_lift_planform_term: f64,
+    /// Axial CP of the body-lift contribution (m, planform centroid
+    /// weighted by planform area across all components).
+    pub body_lift_cp: f64,
 }
 
 impl ForceSampler<'_> {
@@ -105,64 +116,106 @@ impl ForceSampler<'_> {
         let v_rel = s.vel - self.wind;
         let v_rel_mag = v_rel.norm();
         let q = 0.5 * atmos.density * v_rel_mag * v_rel_mag;
-        let drag_mag = q * self.cd * self.area_ref;
-        let drag_world = if v_rel_mag > 1.0e-6 { -drag_mag * v_rel / v_rel_mag } else { Vector3::zeros() };
 
-        let thrust_mag = (self.thrust)(s.t);
-        // Body axis: prefer the explicit orientation quaternion when the
-        // rocket has been integrated for at least one step. At t = 0 with
-        // angular velocity zero, the quaternion already captures the launch
-        // pitch.
+        // ---- AOA between body axis and relative wind ----
         let body_axis = s.body_axis_world();
+        let (alpha, perp_hat) = if v_rel_mag > 1.0e-6 {
+            let v_hat = v_rel / v_rel_mag;
+            let cos_alpha = body_axis.dot(&v_hat).clamp(-1.0, 1.0);
+            let alpha = cos_alpha.acos();
+            let perp = v_hat - cos_alpha * body_axis;
+            let perp_norm = perp.norm();
+            let perp_hat = if perp_norm > 1e-9 { perp / perp_norm } else { Vector3::zeros() };
+            (alpha, perp_hat)
+        } else {
+            (0.0, Vector3::zeros())
+        };
+
+        // ---- Axial drag (zero-AOA) + AOA-induced drag ----
+        // Java's BarrowmanCalculator decomposes total drag into:
+        //   D_axial = Cd · q · S_ref           (the "Drag coefficient" column)
+        //   D_lift  = CN(α) · sin(α) · q · S_ref  (lift-induced axial drag)
+        // The induced piece keeps the rocket from going too high when it
+        // weathercocks; this is the key term that closes the apogee gap.
+        let cn_slender = self.cn_alpha * alpha;
+        let cn_lift = self.body_lift_planform_term * alpha.sin() * alpha.sin();
+        let cn_total = cn_slender + cn_lift;
+        let axial_drag_mag = q * self.cd * self.area_ref;
+        let induced_drag_mag = q * cn_total * alpha.sin().abs() * self.area_ref;
+        let drag_world = if v_rel_mag > 1.0e-6 {
+            -(axial_drag_mag + induced_drag_mag) * v_rel / v_rel_mag
+        } else {
+            Vector3::zeros()
+        };
+
+        // ---- Normal (lift) force perpendicular to v_rel ----
+        // Aerospace convention: at positive AOA the normal force at the CP
+        // points OPPOSITE to the velocity-perpendicular component. This is
+        // the direction that, applied at a CP aft of CG, produces a
+        // RESTORING moment (rotates the nose back toward the relative wind).
+        let lift_world = -q * cn_total * self.area_ref * perp_hat;
+
+        // ---- Thrust ----
+        let thrust_mag = (self.thrust)(s.t);
         let thrust_world = thrust_mag * body_axis;
 
         let gravity = Vector3::new(0.0, 0.0, -G0);
-        let force = thrust_world + drag_world + gravity * s.mass;
+        let force = thrust_world + drag_world + lift_world + gravity * s.mass;
         let acc = force / s.mass.max(1e-6);
 
-        // ----- Rotational dynamics -----
-        // Compute the angle of attack between the body axis and the relative
-        // wind, plus the lift-equivalent force (CN_alpha * α * q * S_ref)
-        // applied at the CP. The moment arm is (CP - CG) along body axis.
+        // ---- Rotational dynamics ----
+        // Slender-body CP and body-lift CP differ — combine their moments
+        // separately so each contribution acts at its physical centre.
+        //
+        // The body axis points from CG forward (toward the nose). The
+        // moment arm from CG to a CP located at distance `arm` AFT of CG
+        // is therefore `-arm · body_axis` (pointing aft, opposite to the
+        // forward-pointing body axis). Note `arm = CP_x − CG_x > 0` when
+        // CP is aft of CG: the conventional sign for a stable rocket.
         let mut d_angular = Vector3::zeros();
-        if v_rel_mag > 1.0 && self.cn_alpha.abs() > 1e-9 {
-            let v_hat = v_rel / v_rel_mag;
-            let cos_alpha = body_axis.dot(&v_hat).clamp(-1.0, 1.0);
-            let alpha = cos_alpha.acos(); // in [0, π]
-            if alpha > 1e-6 {
-                // Component of v_rel perpendicular to body_axis (in world frame).
-                let perp = v_hat - cos_alpha * body_axis;
-                let perp_norm = perp.norm();
-                if perp_norm > 1e-9 {
-                    let perp_hat = perp / perp_norm;
-                    // Normal force magnitude (Barrowman, small-α): CN_alpha * α
-                    let cn = self.cn_alpha * alpha;
-                    let n_force_mag = cn * q * self.area_ref;
-                    // Moment arm CP-CG: positive (CP behind CG) is stabilising.
-                    let arm = self.cp_axial - self.cg_axial;
-                    // Torque vector (world frame): r × F. r points from CG
-                    // backward along body axis by `arm` (negative direction).
-                    let r = -arm * body_axis;
-                    let force_perp = n_force_mag * perp_hat;
-                    let torque_world = r.cross(&force_perp);
-                    // Convert to body frame
-                    let torque_body = inverse_world_to_body(s) * torque_world;
-                    let i_rot = self.moment_of_inertia_rot.max(1e-9);
-                    // Apply pitch / yaw acceleration, ignore roll (axial-
-                    // symmetric rocket, no roll torque from CN_alpha).
-                    d_angular = Vector3::new(0.0, torque_body.y / i_rot, torque_body.z / i_rot);
-                    // Pitch damping: simple linear damping proportional to
-                    // ω; the damping coefficient is taken from a quarter
-                    // of the normal-force slope as a stand-in for the
-                    // proper Barrowman damping moment.
-                    let damping = 0.25 * self.cn_alpha * q * self.area_ref * self.reference_length
-                        / i_rot;
-                    d_angular -= damping * Vector3::new(0.0, s.angular.y, s.angular.z);
-                }
+        if v_rel_mag > 1.0 && alpha > 1e-6 && perp_hat.norm_squared() > 1e-12 {
+            // Force = −CN·q·S·perp_hat (Barrowman convention; see notes
+            // above on lift_world).
+            let n_slender = -q * cn_slender * self.area_ref;
+            let arm_slender = self.cp_axial - self.cg_axial;
+            let r_slender = -arm_slender * body_axis;
+            let torque_slender = r_slender.cross(&(n_slender * perp_hat));
+            let n_lift = -q * cn_lift * self.area_ref;
+            let arm_lift = self.body_lift_cp - self.cg_axial;
+            let r_lift = -arm_lift * body_axis;
+            let torque_lift = r_lift.cross(&(n_lift * perp_hat));
+            let torque_world = torque_slender + torque_lift;
+            let torque_body = inverse_world_to_body(s) * torque_world;
+            let i_rot = self.moment_of_inertia_rot.max(1e-9);
+            d_angular = Vector3::new(0.0, torque_body.y / i_rot, torque_body.z / i_rot);
+            // Pitch damping: stand-in for Barrowman's pitch-damping moment.
+            // The proper formula is C_mq · q · S · L · (ω L / V), where
+            // C_mq is the pitch-damping derivative (typically −5 to −10
+            // for a Barrowman-stable rocket). We use a conservative
+            // estimate proportional to ω, scaled so the time-constant is
+            // a fraction of a second — slow enough to preserve the natural
+            // pitch oscillations Java exhibits.
+            // Java BarrowmanCalculator.calculateDampingMoment combines two
+            // physical effects: (a) CN_α-from-pitch-rate (the fins seeing
+            // different velocities along span) and (b) viscous damping in
+            // air.  For a typical hobby rocket the dominant term is the
+            // fin contribution: C_mq ≈ −2 · (CN_α_fin · L_fin² / L²),
+            // which gives values around −20 to −50 for our geometry.
+            if v_rel_mag > 1e-3 {
+                let arm = (self.cp_axial - self.cg_axial).abs().max(0.005);
+                let c_mq = -2.0 * self.cn_alpha * arm * arm / (self.reference_length * self.reference_length);
+                let damping_torque = c_mq
+                    * q
+                    * self.area_ref
+                    * self.reference_length
+                    * self.reference_length
+                    / v_rel_mag
+                    / i_rot;
+                d_angular += damping_torque * Vector3::new(0.0, s.angular.y, s.angular.z);
             }
         }
 
-        // Quaternion derivative: dq/dt = 0.5 * q * ω_body (quaternion)
+        // Quaternion derivative: dq/dt = 0.5 · q · ω_body
         let omega_q = Quaternion::new(0.0, s.angular.x, s.angular.y, s.angular.z);
         let dq = 0.5 * s.orientation.quaternion() * omega_q;
 

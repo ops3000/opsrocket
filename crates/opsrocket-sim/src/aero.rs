@@ -25,17 +25,29 @@ use crate::mass::iter_layout;
 /// Aerodynamic coefficients at a flight condition.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AeroCoefficients {
-    /// Normal-force coefficient slope dCN/dα (1/rad), at the reference area.
+    /// Normal-force coefficient slope dCN/dα (1/rad) at α = 0
+    /// (pure Barrowman slender-body — fins + nose + transitions). This is
+    /// the value reported in the OpenRocket `Normal force coefficient`
+    /// column; downstream consumers that need the *total* normal force at
+    /// a given AOA should use `total_cn_at_alpha`.
     pub cn_alpha: f64,
-    /// Total drag coefficient (dimensionless), referenced to the reference area.
+    /// Total drag coefficient (referenced to refArea), excluding the
+    /// AOA-induced contribution.  Drag at non-zero α should add
+    /// `cn_at_alpha · sin(α)` to this value.
     pub cd: f64,
     pub cd_friction: f64,
     pub cd_pressure: f64,
     pub cd_base: f64,
-    /// Axial CP from rocket origin (m).
+    /// Axial CP from rocket origin (m), weighted average of the
+    /// slender-body CP and the body-lift CP at the current AOA.
     pub cp_axial: f64,
     pub reference_area: f64,
     pub reference_length: f64,
+    /// Total normal-force coefficient `CN` at the current AOA: the value
+    /// that drives lift force and pitching moment in the dynamics layer.
+    /// Equal to `cn_alpha · α` at small α, plus Galejs body-lift terms
+    /// that scale as `sin²(α)` (so contribute negligibly at α = 0).
+    pub cn_at_alpha: f64,
 }
 
 /// Flight condition input to aero calculations.
@@ -75,23 +87,43 @@ pub fn compute_with(
     let mut cn_x = 0.0_f64;
     let mut cd_friction = 0.0_f64;
     let mut cd_pressure = 0.0_f64;
-    let mut cd_base = 0.0_f64;
+    let cd_base;
 
-    // Compute the average friction coefficient as Java does (Schoenherr +
-    // turbulent fully-developed). Java's `BarrowmanCalculator.calculateFrictionCD`
-    // applies the same Cf to every component and scales by wetted area /
-    // refArea. We do the same here.
-    let cf = friction_coefficient(fc.reynolds.max(1e4));
+    // Java BarrowmanDragCalculator.calculateFrictionCoefficient: fully-
+    // turbulent Schlichting for non-perfect-finish rockets, Mach-corrected.
+    // Plus a roughness-limited Cf; Java takes max(Cf, roughness_Cf).
+    let cf_base = friction_coefficient(fc.reynolds.max(1.0), fc.mach);
+    // Aerodynamic length = total body length (Java uses configuration's
+    // aerodynamic length). We approximate as the rocket's total length.
+    let body_length = rocket.total_length().max(1e-3);
+    let cf_rough = roughness_limited_cf(body_length, fc.mach);
+    let cf = cf_base.max(cf_rough);
+    // Track max body radius and total body length for the body-friction
+    // correction factor at the end.
+    let mut body_friction_sum = 0.0_f64;
+    let mut max_body_radius = 0.0_f64;
+    let mut min_body_x = f64::INFINITY;
+    let mut max_body_x = 0.0_f64;
 
-    // Java SymmetricComponentCalc.getLiftCP: body lift contribution per
-    // component is `BODY_LIFT_K * planformArea / refArea * sin(α) * sinc(α)`.
-    // The slender-body and body-lift contributions average their CPs by
-    // Coordinate.average (weighted by CN_α).  Here we accumulate both into
-    // cn_total / cn_x; AOA only matters for the lift contribution.
+    // We compute two CN_α families simultaneously:
+    //   - slender-body / fin Barrowman: linear in α, AOA-independent slope
+    //   - Galejs body lift: K · A_plan/A_ref · sin(α) · sinc(α) — the
+    //     "CN_α-equivalent" at the given α.  Its contribution to actual CN
+    //     is `α · weight = α · K · A_plan/A_ref · sin(α) · sinc(α)
+    //                    = K · A_plan/A_ref · sin²(α)`, i.e. quadratic in α.
+    //
+    // `cn_alpha` (column 38 in flight data) is the *slope at α=0*, so the
+    // body-lift bit does not contribute there.  Total CN at the current
+    // AOA is built up from both via separate accumulators below.
     let alpha = fc.angle_of_attack;
     let sin_a = alpha.sin();
-    let sinc_a = if alpha.abs() < 1e-12 { 1.0 } else { alpha.sin() / alpha };
-    let body_lift_factor = BODY_LIFT_K * sin_a * sinc_a / area_ref;
+    let sinc_a = if alpha.abs() < 1e-12 { 1.0 } else { sin_a / alpha };
+    let body_lift_weight = BODY_LIFT_K * sin_a * sinc_a;  // per-A_plan term
+    // Separate accumulators for the body-lift contributions so we can
+    // weight CP by both slender and lift CNs without contaminating the
+    // pure CN_α slope.
+    let mut lift_cn = 0.0_f64;
+    let mut lift_cn_x = 0.0_f64;
 
     for (comp, axial_start) in &layout {
         match comp {
@@ -100,34 +132,41 @@ pub fn compute_with(
                 let (cn_a, cp_local) = slender_body_cna(0.0, n.aft_radius, n.length, integ.volume, area_ref);
                 cn_total += cn_a;
                 cn_x += cn_a * (axial_start + cp_local);
-                // Body lift contribution from the nose cone planform.
-                let cn_lift = body_lift_factor * integ.planform_area;
-                cn_total += cn_lift;
-                cn_x += cn_lift * (axial_start + integ.planform_center);
-                cd_friction += cf * integ.wet_area / area_ref;
+                let lift_w = body_lift_weight * integ.planform_area / area_ref;
+                lift_cn += lift_w;
+                lift_cn_x += lift_w * (axial_start + integ.planform_center);
+                body_friction_sum += cf * integ.wet_area / area_ref;
+                if n.aft_radius > max_body_radius { max_body_radius = n.aft_radius; }
+                min_body_x = min_body_x.min(*axial_start);
+                max_body_x = max_body_x.max(axial_start + n.length);
                 cd_pressure += nose_pressure_drag(n.shape, n.shape_parameter, n.length, n.aft_radius, fc.mach);
             }
             Component::BodyTube(t) => {
                 let radius = t.radius.unwrap_or(0.0);
                 let wet = 2.0 * PI * radius * t.length;
-                cd_friction += cf * wet / area_ref;
-                // Body tube CN_α = 0 (slender body), but the body still
-                // produces lift proportional to its planform area.
+                body_friction_sum += cf * wet / area_ref;
+                if radius > max_body_radius { max_body_radius = radius; }
+                min_body_x = min_body_x.min(*axial_start);
+                max_body_x = max_body_x.max(axial_start + t.length);
                 let planform_area = 2.0 * radius * t.length;
                 let planform_center = 0.5 * t.length;
-                let cn_lift = body_lift_factor * planform_area;
-                cn_total += cn_lift;
-                cn_x += cn_lift * (axial_start + planform_center);
+                let lift_w = body_lift_weight * planform_area / area_ref;
+                lift_cn += lift_w;
+                lift_cn_x += lift_w * (axial_start + planform_center);
             }
             Component::Transition(t) => {
                 let integ = shape_integrals(t.shape, t.shape_parameter, t.length, t.fore_radius, t.aft_radius);
                 let (cn_a, cp_local) = slender_body_cna(t.fore_radius, t.aft_radius, t.length, integ.volume, area_ref);
                 cn_total += cn_a;
                 cn_x += cn_a * (axial_start + cp_local);
-                let cn_lift = body_lift_factor * integ.planform_area;
-                cn_total += cn_lift;
-                cn_x += cn_lift * (axial_start + integ.planform_center);
-                cd_friction += cf * integ.wet_area / area_ref;
+                let lift_w = body_lift_weight * integ.planform_area / area_ref;
+                lift_cn += lift_w;
+                lift_cn_x += lift_w * (axial_start + integ.planform_center);
+                body_friction_sum += cf * integ.wet_area / area_ref;
+                let max_r = t.fore_radius.max(t.aft_radius);
+                if max_r > max_body_radius { max_body_radius = max_r; }
+                min_body_x = min_body_x.min(*axial_start);
+                max_body_x = max_body_x.max(axial_start + t.length);
                 cd_pressure += transition_pressure_drag(t, fc.mach, area_ref);
             }
             Component::FinSet(f) => {
@@ -135,6 +174,7 @@ pub fn compute_with(
                 let (cn_a, cp) = fins_cn_alpha(f, body_radius, area_ref);
                 cn_total += cn_a;
                 cn_x += cn_a * (axial_start + cp);
+                // Fin friction is NOT subject to the body-fineness correction.
                 cd_friction += fin_friction_drag(f, cf, area_ref);
                 cd_pressure += fin_pressure_drag(f, fc.mach, area_ref);
             }
@@ -146,11 +186,34 @@ pub fn compute_with(
         }
     }
 
-    if !motor_firing {
-        cd_base = base_drag(fc.mach);
+    // Apply body-fineness friction correction (Java BarrowmanDragCalculator,
+    // line 167): correction = 1 + 1/(2·fB) where fB = total_length / maxR.
+    if max_body_radius > 0.0 && max_body_x > min_body_x {
+        let correction = body_friction_correction(max_body_x - min_body_x, max_body_radius);
+        cd_friction += body_friction_sum * correction;
+    } else {
+        cd_friction += body_friction_sum;
     }
 
-    let cp_axial = if cn_total.abs() > 1e-9 { cn_x / cn_total } else { 0.0 };
+    // Java BarrowmanDragCalculator.calculateBaseCD: returns 0.12 + 0.13·M²
+    // regardless of motor firing.  The base annulus is always subject to
+    // separated-flow drag in OR's model; the motor jet effect would have
+    // to be modelled separately via a thrust-coupling term we don't have.
+    let _ = motor_firing;
+    cd_base = base_drag(fc.mach);
+    let _ = body_friction_correction; // silence warning when unused
+
+    // Java's BarrowmanCalculator combines slender-body and body-lift
+    // contributions via Coordinate.average (weighted by their CN_α / weight
+    // values). Total CN at the live AOA = α · (cn_α_slender + lift_weight).
+    // CP is then the CN-weighted mix of the two CPs.
+    let total_weight = cn_total + lift_cn;
+    let cp_axial = if total_weight.abs() > 1e-12 {
+        (cn_x + lift_cn_x) / total_weight
+    } else {
+        0.0
+    };
+    let cn_at_alpha = alpha * total_weight;
     let cd = cd_friction + cd_pressure + cd_base;
     AeroCoefficients {
         cn_alpha: cn_total,
@@ -161,11 +224,67 @@ pub fn compute_with(
         cp_axial,
         reference_area: area_ref,
         reference_length: d_ref,
+        cn_at_alpha,
     }
 }
 
 fn nose_cone_integrals(n: &NoseCone) -> ShapeIntegrals {
     shape_integrals(n.shape, n.shape_parameter, n.length, 0.0, n.aft_radius)
+}
+
+/// Precomputed body-lift geometry. Used by the dynamics layer so it can
+/// compute the AOA-dependent body lift each step without recomputing all
+/// per-component integrals.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BodyLiftGeometry {
+    /// `K · Σ A_planform / A_ref` — the Galejs body-lift coefficient
+    /// multiplied by the total side-view area divided by the reference
+    /// area.  Multiplied by `sin²(α)` to give the body-lift contribution
+    /// to total CN.
+    pub planform_term: f64,
+    /// Axial CP of the body-lift contribution (m, weighted average of
+    /// each component's planform centre by its planform area).
+    pub planform_cp: f64,
+    /// Reference area (m²) — convenience.
+    pub reference_area: f64,
+}
+
+/// Compute the body-lift planform-area sum / weighted centre for the
+/// rocket.  These quantities are AOA-independent and only need to be
+/// recomputed when the rocket's active-stage configuration changes.
+pub fn body_lift_geometry(rocket: &Rocket) -> BodyLiftGeometry {
+    let layout = iter_layout(rocket);
+    let d_ref = rocket.max_diameter();
+    let area_ref = PI * 0.25 * d_ref * d_ref;
+    if area_ref <= 0.0 {
+        return BodyLiftGeometry::default();
+    }
+    let mut total_area = 0.0_f64;
+    let mut total_area_x = 0.0_f64;
+    for (comp, axial_start) in &layout {
+        match comp {
+            Component::NoseCone(n) => {
+                let integ = nose_cone_integrals(n);
+                total_area += integ.planform_area;
+                total_area_x += integ.planform_area * (axial_start + integ.planform_center);
+            }
+            Component::BodyTube(t) => {
+                let r = t.radius.unwrap_or(0.0);
+                let a = 2.0 * r * t.length;
+                total_area += a;
+                total_area_x += a * (axial_start + 0.5 * t.length);
+            }
+            Component::Transition(t) => {
+                let integ = shape_integrals(t.shape, t.shape_parameter, t.length, t.fore_radius, t.aft_radius);
+                total_area += integ.planform_area;
+                total_area_x += integ.planform_area * (axial_start + integ.planform_center);
+            }
+            _ => {}
+        }
+    }
+    let planform_term = BODY_LIFT_K * total_area / area_ref;
+    let planform_cp = if total_area > 1e-12 { total_area_x / total_area } else { 0.0 };
+    BodyLiftGeometry { planform_term, planform_cp, reference_area: area_ref }
 }
 
 /// Slender-body CN_α and CP (m, local to the component).
@@ -284,18 +403,68 @@ fn base_drag(mach: f64) -> f64 {
     0.12 + 0.13 * m * m
 }
 
-fn friction_coefficient(reynolds: f64) -> f64 {
-    // Java BarrowmanCalculator.calculateFrictionCD uses the Schlichting
-    // formula for fully turbulent flow:
-    //   Cf = 0.0315 / Re^(1/7) for the "turbulent" branch.
-    // For low Re it uses laminar Cf = 1.328 / sqrt(Re).  Transition Re is
-    // taken as 5e5.  We replicate that piecewise definition here.
-    if reynolds < 5.0e5 {
-        let cf = 1.328 / reynolds.sqrt();
-        cf
+/// Friction coefficient — port of Java
+/// `BarrowmanDragCalculator.calculateFrictionCoefficient` for the
+/// non-perfect-finish (default) case, with Mach correction.
+///
+/// For a rocket with `isPerfectFinish() == false` (the default), Java uses
+/// the fully-turbulent Schlichting formula even at low Reynolds:
+///   Re < 1e4 : Cf = 1.48e-2
+///   else     : Cf = 1.0 / (1.50·ln(Re) − 5.6)²
+/// Then Mach correction:
+///   M < 0.9  : Cf *= (1 − 0.1·M²)
+///   M > 1.1  : Cf *= 1 / (1 + 0.15·M²)^0.58
+///   otherwise: linear blend between the two
+fn friction_coefficient(reynolds: f64, mach: f64) -> f64 {
+    let re = reynolds.max(1.0);
+    let mut cf = if re < 1.0e4 {
+        1.48e-2
     } else {
-        0.0315 / reynolds.powf(1.0 / 7.0)
+        let denom = 1.50 * re.ln() - 5.6;
+        1.0 / (denom * denom)
+    };
+    // Mach correction
+    let c1 = if mach < 1.1 { 1.0 - 0.1 * mach * mach } else { 1.0 };
+    let c2 = if mach > 0.9 { 1.0 / (1.0 + 0.15 * mach * mach).powf(0.58) } else { 1.0 };
+    if mach < 0.9 {
+        cf *= c1;
+    } else if mach < 1.1 {
+        cf *= c2 * (mach - 0.9) / 0.2 + c1 * (1.1 - mach) / 0.2;
+    } else {
+        cf *= c2;
     }
+    cf
+}
+
+/// Roughness-limited friction coefficient — Java
+/// `BarrowmanDragCalculator`: `0.032 · (roughness/length)^0.2 · roughness_correction`.
+///
+/// For a typical hobby-rocket "Normal" finish the roughness size is ~60 µm.
+/// We don't yet read this per component, so we hardcode a representative
+/// value matching OpenRocket's default `Finish.NORMAL` (60 µm).
+fn roughness_limited_cf(rocket_length: f64, mach: f64) -> f64 {
+    let roughness_size = 60.0e-6_f64; // OpenRocket default "Normal" finish
+    let len = rocket_length.max(1e-3);
+    let base = 0.032 * (roughness_size / len).powf(0.2);
+    let correction = if mach < 0.9 {
+        1.0 - 0.1 * mach * mach
+    } else if mach > 1.1 {
+        1.0 / (1.0 + 0.18 * mach * mach)
+    } else {
+        let c1 = 1.0 - 0.1 * 0.81;
+        let c2 = 1.0 / (1.0 + 0.18 * 1.21);
+        c2 * (mach - 0.9) / 0.2 + c1 * (1.1 - mach) / 0.2
+    };
+    base * correction
+}
+
+/// Body-length-based fineness correction for friction drag of body
+/// components: Java `BarrowmanDragCalculator` applies a multiplier of
+/// `1 + 1/(2·fB)` to the bodies' summed friction, where `fB = length/maxR`.
+fn body_friction_correction(length: f64, max_radius: f64) -> f64 {
+    let max_r = max_radius.max(1e-9);
+    let f_b = (length + 0.0001) / max_r;
+    1.0 + 1.0 / (2.0 * f_b)
 }
 
 // ============================================================================

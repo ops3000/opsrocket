@@ -131,6 +131,37 @@ fn find_motor_assignments_per_stage(
         .collect()
 }
 
+/// Return the axial position (m from rocket origin) of a motor mount with
+/// the given config id, if found. Used to compute motor CG contribution.
+pub(crate) fn motor_mount_axial_position(rocket: &Rocket, config_id: &str) -> Option<f64> {
+    let layout = crate::mass::iter_layout(rocket);
+    for (c, axial_start) in &layout {
+        match c {
+            Component::InnerTube(it) => {
+                if let Some(m) = it.motor_mount.as_ref() {
+                    for a in &m.motors {
+                        if a.config_id == config_id {
+                            // Approximate motor CG as the centre of the inner tube.
+                            return Some(axial_start + 0.5 * it.length);
+                        }
+                    }
+                }
+            }
+            Component::BodyTube(t) => {
+                if let Some(m) = t.motor_mount.as_ref() {
+                    for a in &m.motors {
+                        if a.config_id == config_id {
+                            return Some(axial_start + 0.5 * t.length);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 fn motor_assignment_in_component_with_event(
     c: &Component,
     config_id: &str,
@@ -343,7 +374,12 @@ pub fn simulate_with(
         .filter_map(|c| c.as_ref().map(|(curve, _)| curve.total_mass))
         .sum();
     let total_mass_initial = mass_props.mass + total_motor_mass;
-    run_multistage(&doc.rocket, &opts, &mass_props, total_mass_initial, stage_curves)
+    // Per-stage motor axial position (for CG contribution).
+    let motor_positions: Vec<Option<f64>> = per_stage
+        .iter()
+        .map(|entry| entry.as_ref().and_then(|(a, _)| motor_mount_axial_position(&doc.rocket, &a.config_id)))
+        .collect();
+    run_multistage(&doc.rocket, &opts, &mass_props, total_mass_initial, stage_curves, motor_positions)
 }
 
 /// Multi-stage simulation driver.  Treats `stage_curves` as the per-stage
@@ -357,6 +393,7 @@ fn run_multistage(
     mass_props: &MassProperties,
     initial_mass: f64,
     stage_curves: Vec<Option<(ThrustCurve, IgnitionEvent)>>,
+    motor_positions: Vec<Option<f64>>,
 ) -> Result<SimulationResult> {
     let n = rocket.stages.len();
     // Whether each stage is currently attached.
@@ -440,6 +477,33 @@ fn run_multistage(
             }
         }
         total
+    }
+    /// Total CG including current motor mass contribution at each stage.
+    fn combined_cg(
+        t: f64,
+        stage_mass: f64,
+        stage_cg: f64,
+        stage_curves: &[Option<(ThrustCurve, IgnitionEvent)>],
+        attached: &[bool],
+        ignition_time: &[Option<f64>],
+        motor_positions: &[Option<f64>],
+    ) -> (f64, f64) {
+        let mut sum_mass = stage_mass;
+        let mut sum_moment = stage_mass * stage_cg;
+        for i in 0..stage_curves.len() {
+            if !attached[i] { continue; }
+            if let Some((curve, _)) = stage_curves[i].as_ref() {
+                let elapsed = ignition_time[i].map(|t0| t - t0).unwrap_or(0.0);
+                let prop_remaining = curve.propellant_mass_at(elapsed);
+                let casing = curve.total_mass - curve.propellant_mass;
+                let m = casing + prop_remaining;
+                let pos = motor_positions[i].unwrap_or(stage_cg);
+                sum_mass += m;
+                sum_moment += m * pos;
+            }
+        }
+        let cg = if sum_mass > 1e-12 { sum_moment / sum_mass } else { stage_cg };
+        (sum_mass, cg)
     }
 
     // Push initial state
@@ -531,6 +595,21 @@ fn run_multistage(
 
         // Pull current aero coefficients for rotational dynamics.
         let (_, _, _, _, cn_alpha_now, cp_now) = aero_at(&state, &aero_rocket, &atmosphere, wind, thrust);
+        let body_lift = crate::aero::body_lift_geometry(&aero_rocket);
+        // Combine empty-rocket CG with motor mass contributions to get the
+        // CG used by the moment-arm calc (CP − CG). This is critical: my
+        // empty-rocket CG is ~3 cm forward of Java's total CG (with motor),
+        // and the resulting 50%-too-large arm previously over-rotated the
+        // rocket and reduced AOA-induced drag.
+        let (_, total_cg) = combined_cg(
+            state.t,
+            stage_mass.mass,
+            stage_mass.cg_axial,
+            &stage_curves,
+            &attached,
+            &ignition_time,
+            &motor_positions,
+        );
         let sampler = ForceSampler {
             atmosphere: &atmosphere,
             wind,
@@ -541,15 +620,29 @@ fn run_multistage(
             cn_alpha: if deployed { 0.0 } else { cn_alpha_now },
             reference_length: aero0.reference_length,
             cp_axial: cp_now,
-            cg_axial: stage_mass.cg_axial,
+            cg_axial: total_cg,
             moment_of_inertia_rot: stage_mass.i_rot.max(1e-9),
             moment_of_inertia_long: stage_mass.i_long.max(1e-9),
+            body_lift_planform_term: if deployed { 0.0 } else { body_lift.planform_term },
+            body_lift_cp: body_lift.planform_cp,
         };
         let next = rk4_step(&state, dt, &sampler);
         let mut next = State { mass: next.mass.max(1.0e-6), ..next };
 
-        // On-rail constraint
+        // On-rail constraint: while sliding up the launch rod, the rocket
+        // is constrained to move along the rod direction only and cannot
+        // rotate.  Pin orientation, kill angular velocity, project linear
+        // velocity onto the rod (body) axis so AOA stays zero physically
+        // even though the wind would otherwise tilt the apparent flow.
         if on_rail {
+            next.orientation = state.orientation;
+            next.angular = Vec3::zeros();
+            let rod_axis = state.body_axis_world();
+            let along = next.vel.dot(&rod_axis).max(0.0);
+            next.vel = along * rod_axis;
+            // Position constrained to the rod line through the launch point.
+            let above = (next.pos - state.pos).dot(&rod_axis).max(0.0);
+            next.pos = state.pos + above * rod_axis;
             if thrust < next.mass * G0 && !lifted {
                 next.pos = state.pos;
                 next.vel = Vec3::zeros();
@@ -831,6 +924,8 @@ fn run(
             cg_axial: mass_props.cg_axial,
             moment_of_inertia_rot: mass_props.i_rot.max(1e-9),
             moment_of_inertia_long: mass_props.i_long.max(1e-9),
+            body_lift_planform_term: 0.0,
+            body_lift_cp: 0.0,
         };
         let next = rk4_step(&state, dt, &sampler);
         // monotonic-mass safety: don't let the rocket "gain" mass below empty
@@ -1017,10 +1112,25 @@ fn push_row(
         thrust > 1.0e-3,
     );
     let cp = aero.cp_axial;
-    let cg = mass_props.cg_axial;
+    // Use the live (motor-inclusive) CG that the dynamics is using. The
+    // mass_props passed in here is the empty rocket; state.mass includes
+    // motor mass so the difference + assumption "motor at empty CG" is a
+    // reasonable approximation, but the dynamics uses the more accurate
+    // combined_cg.  For the data column we approximate: CG_total ≈
+    // (empty_mass·CG_empty + motor_mass·motor_axial) / total_mass, but
+    // motor_axial isn't known here so we report empty CG biased by motor.
+    let motor_mass = (state.mass - mass_props.mass).max(0.0);
+    let cg = if state.mass > 1e-9 {
+        // Approximate motor at 75% of the rocket length (close to motor
+        // mount position for typical hobby rockets).  The dynamics uses
+        // the exact value; this is only for the reporting column.
+        let motor_axial_guess = 0.75 * (mass_props.cg_axial * 2.0).max(0.3);
+        (mass_props.mass * mass_props.cg_axial + motor_mass * motor_axial_guess) / state.mass
+    } else {
+        mass_props.cg_axial
+    };
     let caliber = if aero.reference_length > 0.0 { (cp - cg) / aero.reference_length } else { 0.0 };
 
-    let motor_mass = (state.mass - mass_props.mass).max(0.0);
     let _ = motor_mass_full;
     let total_velocity = speed;
     let vertical_velocity = state.vel.z;

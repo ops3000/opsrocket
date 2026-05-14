@@ -55,6 +55,8 @@ fn rk4_freefall_matches_analytic() {
         cg_axial: 0.0,
         moment_of_inertia_rot: 1.0,
         moment_of_inertia_long: 1.0,
+        body_lift_planform_term: 0.0,
+        body_lift_cp: 0.0,
     };
     let mut s = State::at_rest(100.0, 1.0, 0.0);
     let dt = 0.01;
@@ -88,6 +90,8 @@ fn rk4_integrates_mass_loss_linearly() {
         cg_axial: 0.0,
         moment_of_inertia_rot: 1.0,
         moment_of_inertia_long: 1.0,
+        body_lift_planform_term: 0.0,
+        body_lift_cp: 0.0,
     };
     let mut s = State::at_rest(1000.0, 1.0, 0.0);
     for _ in 0..100 {
