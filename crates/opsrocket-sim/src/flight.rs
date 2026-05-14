@@ -107,6 +107,9 @@ pub struct ForceSampler<'a> {
     /// Axial CP of the body-lift contribution (m, planform centroid
     /// weighted by planform area across all components).
     pub body_lift_cp: f64,
+    /// Java pitch-damping multiplier (constant per rocket geometry).
+    /// Used as `Cm_damp = 3 · mul · (ω/V)²`.
+    pub pitch_damping_mul: f64,
 }
 
 impl ForceSampler<'_> {
@@ -195,23 +198,28 @@ impl ForceSampler<'_> {
             // estimate proportional to ω, scaled so the time-constant is
             // a fraction of a second — slow enough to preserve the natural
             // pitch oscillations Java exhibits.
-            // Java BarrowmanCalculator.calculateDampingMoment combines two
-            // physical effects: (a) CN_α-from-pitch-rate (the fins seeing
-            // different velocities along span) and (b) viscous damping in
-            // air.  For a typical hobby rocket the dominant term is the
-            // fin contribution: C_mq ≈ −2 · (CN_α_fin · L_fin² / L²),
-            // which gives values around −20 to −50 for our geometry.
+            // Java BarrowmanStabilityCalculator.calculateDampingMoments:
+            //   Cm_damp_magnitude = min(3 · mul · (ω/V)², |Cm_total|)
+            //   Cm -= sign(ω) · Cm_damp_magnitude
+            //
+            // Translated to dynamics: damping torque about the transverse
+            // body axes is Cm_damp · q · S · L, opposite to ω. The cap
+            // ensures damping never reverses the moment, which matters
+            // when ω is small.
             if v_rel_mag > 1e-3 {
-                let arm = (self.cp_axial - self.cg_axial).abs().max(0.005);
-                let c_mq = -2.0 * self.cn_alpha * arm * arm / (self.reference_length * self.reference_length);
-                let damping_torque = c_mq
-                    * q
-                    * self.area_ref
-                    * self.reference_length
-                    * self.reference_length
-                    / v_rel_mag
-                    / i_rot;
-                d_angular += damping_torque * Vector3::new(0.0, s.angular.y, s.angular.z);
+                let q_s_l = q * self.area_ref * self.reference_length;
+                let total_cm_mag = (cn_total * (self.cp_axial - self.cg_axial)
+                    / self.reference_length)
+                    .abs();
+                let omega_y = s.angular.y;
+                let omega_z = s.angular.z;
+                let damp_y_mag =
+                    (3.0 * self.pitch_damping_mul * (omega_y / v_rel_mag).powi(2)).min(total_cm_mag);
+                let damp_z_mag =
+                    (3.0 * self.pitch_damping_mul * (omega_z / v_rel_mag).powi(2)).min(total_cm_mag);
+                let damp_y = -omega_y.signum() * damp_y_mag * q_s_l / i_rot;
+                let damp_z = -omega_z.signum() * damp_z_mag * q_s_l / i_rot;
+                d_angular += Vector3::new(0.0, damp_y, damp_z);
             }
         }
 

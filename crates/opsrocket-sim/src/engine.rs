@@ -542,19 +542,12 @@ fn run_multistage(
         let thrust = thrust_now(state.t, &stage_curves, &attached, &ignition_time);
         let (cd_now, _, _, _, _, _) = aero_at(&state, &aero_rocket, &atmosphere, wind, thrust);
 
-        // Parachute opening shock factor.
-        let opening_factor = if deployed {
-            let elapsed = (state.t - deploy_time).max(0.0);
-            (elapsed / chute_open_time()).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
+        // Java BasicLandingStepper.computeCD instantly switches to the
+        // parachute's Cd·A_canopy / refArea on deployment — no opening
+        // shock ramp.  Match that behaviour.
+        let _ = deploy_time;
         let active_cd = if deployed { 0.0 } else { cd_now };
-        let active_area = if deployed {
-            chute_drag_factor * opening_factor + area_ref * cd_now * (1.0 - opening_factor)
-        } else {
-            area_ref
-        };
+        let active_area = if deployed { chute_drag_factor } else { area_ref };
 
         // Build a fresh thrust + mass_dot closure for this step. Both
         // capture only by reference for safety.
@@ -625,6 +618,9 @@ fn run_multistage(
             moment_of_inertia_long: stage_mass.i_long.max(1e-9),
             body_lift_planform_term: if deployed { 0.0 } else { body_lift.planform_term },
             body_lift_cp: body_lift.planform_cp,
+            pitch_damping_mul: if deployed { 0.0 } else {
+                crate::aero::pitch_damping_coefficient(&aero_rocket, total_cg)
+            },
         };
         let next = rk4_step(&state, dt, &sampler);
         let mut next = State { mass: next.mass.max(1.0e-6), ..next };
@@ -926,6 +922,7 @@ fn run(
             moment_of_inertia_long: mass_props.i_long.max(1e-9),
             body_lift_planform_term: 0.0,
             body_lift_cp: 0.0,
+            pitch_damping_mul: 0.0,
         };
         let next = rk4_step(&state, dt, &sampler);
         // monotonic-mass safety: don't let the rocket "gain" mass below empty
@@ -1063,14 +1060,13 @@ fn chute_open_time() -> f64 {
 }
 
 fn parachute_drag_factor(rocket: &Rocket) -> f64 {
-    // Effective Cd·A for fully-open recovery devices. We use a default Cd
-    // of 0.75 for hemispherical model-rocket parachutes (matches OR's
-    // `Parachute.getDefaultCD()` minus a small effectiveness loss accounting
-    // for scallops / gaps / shroud-line bunching).
+    // Java Parachute.DEFAULT_CD = 0.8; Parachute.getComponentCD always
+    // returns the stored `cd` value (no scallop correction).  Match Java
+    // exactly: Cd·A summed over all parachutes.
     let mut total = 0.0;
     for c in rocket.iter_components() {
         if let Component::Parachute(p) = c {
-            let cd = p.cd.unwrap_or(0.75);
+            let cd = p.cd.unwrap_or(0.8);
             total += cd * PI * (0.5 * p.diameter).powi(2);
         }
     }
@@ -1132,7 +1128,10 @@ fn push_row(
     let caliber = if aero.reference_length > 0.0 { (cp - cg) / aero.reference_length } else { 0.0 };
 
     let _ = motor_mass_full;
-    let total_velocity = speed;
+    // Java reports world-frame velocity in the "Total velocity" column,
+    // not the wind-relative magnitude. The wind-relative `speed` is only
+    // used internally for q and Mach computations.
+    let total_velocity = state.vel.norm();
     let vertical_velocity = state.vel.z;
     let lateral_velocity = (state.vel.x * state.vel.x + state.vel.y * state.vel.y).sqrt();
     let vertical_acc = f64::NAN; // not tracked between steps in this MVP

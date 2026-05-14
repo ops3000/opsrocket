@@ -171,7 +171,7 @@ pub fn compute_with(
             }
             Component::FinSet(f) => {
                 let body_radius = local_body_radius(&layout, *axial_start).unwrap_or(0.0);
-                let (cn_a, cp) = fins_cn_alpha(f, body_radius, area_ref);
+                let (cn_a, cp) = fins_cn_alpha(f, body_radius, area_ref, fc.mach);
                 cn_total += cn_a;
                 cn_x += cn_a * (axial_start + cp);
                 // Fin friction is NOT subject to the body-fineness correction.
@@ -181,7 +181,15 @@ pub fn compute_with(
             Component::LaunchLug(l) => {
                 let wet = 2.0 * PI * l.outer_radius * l.length * l.instance_count as f64;
                 cd_friction += cf * wet / area_ref;
+                // Java LaunchLugCalc.calculatePressureCD uses TubeCalc:
+                // internal-flow pressure drag through the hollow lug body.
+                let n = l.instance_count as f64;
+                cd_pressure += n * tube_internal_pressure_cd(
+                    l.outer_radius, l.inner_radius, l.length, fc, area_ref);
             }
+            // Java InternalComponent.isAerodynamic() == false — InnerTube,
+            // CenteringRing, MassObject, Parachute, ShockCord do not appear
+            // in the drag aggregation.
             _ => {}
         }
     }
@@ -247,6 +255,73 @@ pub struct BodyLiftGeometry {
     pub planform_cp: f64,
     /// Reference area (m²) — convenience.
     pub reference_area: f64,
+    /// Total summed planform area of the body components (m²).
+    pub total_planform_area: f64,
+    /// Total axial length of all symmetric body components (m).
+    pub total_body_length: f64,
+}
+
+/// Pitch-damping multiplier — direct port of
+/// `BarrowmanStabilityCalculator.getDampingMultiplier` and
+/// `calculateDampingMoments`.
+///
+///   d_avg  = total_planform_area / total_body_length
+///   mul_body = 0.275 · d_avg / (refArea · refLength)
+///              · (cgx⁴ + (body_length − cgx)⁴)
+///   mul_fin  = Σ 0.6 · min(N, 4) · A_planform_fin · |x_midchord − cgx|³
+///              / (refArea · refLength)
+///   damping  = 3 · (mul_body + mul_fin) · (ω/V)²
+///   capped at the magnitude of the current pitching moment.
+///
+/// Returns the damping coefficient `mul` such that
+/// `Cm_damp = 3 · mul · (ω/V)²` (with the factor 3 from the "higher damping
+/// yields more realistic apogee turn" empirical scaling in Java).
+pub fn pitch_damping_coefficient(rocket: &Rocket, cgx: f64) -> f64 {
+    let layout = iter_layout(rocket);
+    let d_ref = rocket.max_diameter();
+    let area_ref = PI * 0.25 * d_ref * d_ref;
+    let ref_length = d_ref;
+    if area_ref <= 0.0 || ref_length <= 0.0 {
+        return 0.0;
+    }
+    // Body planform area + length sums (symmetric components only).
+    let mut planform_area = 0.0_f64;
+    let mut body_length = 0.0_f64;
+    let mut mul_fin = 0.0_f64;
+    for (comp, axial_start) in &layout {
+        match comp {
+            Component::NoseCone(n) => {
+                let integ = nose_cone_integrals(n);
+                planform_area += integ.planform_area;
+                body_length += n.length;
+            }
+            Component::BodyTube(t) => {
+                let r = t.radius.unwrap_or(0.0);
+                planform_area += 2.0 * r * t.length;
+                body_length += t.length;
+            }
+            Component::Transition(t) => {
+                let integ = shape_integrals(t.shape, t.shape_parameter, t.length, t.fore_radius, t.aft_radius);
+                planform_area += integ.planform_area;
+                body_length += t.length;
+            }
+            Component::FinSet(f) => {
+                let af = 0.5 * (f.root_chord + f.tip_chord) * f.height;
+                let mid_chord_pos = axial_start + 0.5 * f.root_chord;
+                let n_eff = (f.fin_count as f64).min(4.0);
+                let dist = (mid_chord_pos - cgx).abs();
+                mul_fin += 0.6 * n_eff * af * dist.powi(3) / (area_ref * ref_length);
+            }
+            _ => {}
+        }
+    }
+    if body_length <= 0.0 {
+        return mul_fin;
+    }
+    let d_avg = planform_area / body_length;
+    let mul_body = 0.275 * d_avg / (area_ref * ref_length)
+        * (cgx.powi(4) + (body_length - cgx).powi(4));
+    mul_body + mul_fin
 }
 
 /// Compute the body-lift planform-area sum / weighted centre for the
@@ -284,7 +359,23 @@ pub fn body_lift_geometry(rocket: &Rocket) -> BodyLiftGeometry {
     }
     let planform_term = BODY_LIFT_K * total_area / area_ref;
     let planform_cp = if total_area > 1e-12 { total_area_x / total_area } else { 0.0 };
-    BodyLiftGeometry { planform_term, planform_cp, reference_area: area_ref }
+    // Total body length (used by pitch damping & body lift).
+    let mut total_body_length = 0.0_f64;
+    for (comp, _) in &layout {
+        match comp {
+            Component::NoseCone(n) => total_body_length += n.length,
+            Component::BodyTube(t) => total_body_length += t.length,
+            Component::Transition(t) => total_body_length += t.length,
+            _ => {}
+        }
+    }
+    BodyLiftGeometry {
+        planform_term,
+        planform_cp,
+        reference_area: area_ref,
+        total_planform_area: total_area,
+        total_body_length,
+    }
 }
 
 /// Slender-body CN_α and CP (m, local to the component).
@@ -347,25 +438,54 @@ fn local_body_radius(layout: &[(&Component, f64)], axial: f64) -> Option<f64> {
 // implement the SUBSONIC region (the rocket fixtures stay below Mach 0.5):
 // a small base-Cd for blunt shapes and 0 for streamlined ogives.
 
-fn nose_pressure_drag(shape: opsrocket_core::component::NoseShape, _param: f64, length: f64, radius: f64, mach: f64) -> f64 {
+fn nose_pressure_drag(shape: opsrocket_core::component::NoseShape, param: f64, length: f64, radius: f64, mach: f64) -> f64 {
     if length <= 0.0 || radius <= 0.0 {
         return 0.0;
     }
-    let fr = length / (2.0 * radius); // fineness ratio of nose alone
-    // Calibration: even at subsonic Mach the Java pressure-drag interpolator
-    // is non-zero (built on NASA TR-R-100 tables and extrapolated below the
-    // tabulated range).  These values are tuned to reproduce the observed
-    // base values from upstream OpenRocket for typical hobby-rocket
-    // fineness ratios.
-    let cd0 = match shape {
-        opsrocket_core::component::NoseShape::Conical => 0.5 * (1.0 / fr.max(0.5)).min(1.0),
-        opsrocket_core::component::NoseShape::Ogive => 0.1 * (1.0 / fr.max(0.5)).min(1.0),
-        opsrocket_core::component::NoseShape::Ellipsoid => 0.05,
+    // Subsonic-region implementation of Java's
+    // SymmetricComponentCalc.calculateNoseInterpolator + getPressureCD.
+    //
+    // Most NASA TR-R-100 tables start at Mach ~0.9 with value 0 (or near
+    // zero) at the low end.  Java's subsonic-extrapolation block
+    // (lines 401-427) sets `Cd_p = 0` outright when `minValue < 0.001`,
+    // which is the case for OGIVE, POWER, and PARABOLIC shapes at typical
+    // fineness ratios.  For CONICAL noses Java retains the half-angle
+    // term `0.8 · sin²(half_angle)` even at low Mach.
+    //
+    // For HAACK / ELLIPSOID the tables start non-zero; we approximate the
+    // subsonic value by Java's power-law fit `a · M^b + cdMach0` evaluated
+    // at the given Mach.  At very low Mach this is close to cdMach0 itself.
+    let half_angle = (radius / length).atan();
+    let sin_phi_sq = half_angle.sin() * half_angle.sin();
+    let cd_mach_0 = 0.8 * sin_phi_sq;
+    match shape {
+        opsrocket_core::component::NoseShape::Ogive => {
+            // Java OGIVE table at M=0.95 is 0 (param doesn't matter at low M).
+            // Subsonic Cd_p = 0.  Param-dependent term scales nothing here.
+            let _ = (param, mach);
+            0.0
+        }
+        opsrocket_core::component::NoseShape::Conical => {
+            // Conical: Java's subsonic extrapolation uses the half-angle
+            // pressure-drag stagnation term.  Falls off gently at very low
+            // Mach numbers.
+            cd_mach_0 * (1.0 + 0.15 * mach * mach)
+        }
+        opsrocket_core::component::NoseShape::Ellipsoid => {
+            // Java's ELLIPSOID interpolator starts at M=1.2 with Cd=0.11.
+            // The subsonic extrapolation gives a very small value at low
+            // Mach (a·M^b + cdMach0 with cdMach0 = 0.8·sin²φ ≈ 0).
+            cd_mach_0 * (1.0 + 0.15 * mach * mach)
+        }
         opsrocket_core::component::NoseShape::Parabolic
         | opsrocket_core::component::NoseShape::Power
-        | opsrocket_core::component::NoseShape::Haack => 0.08,
-    };
-    cd0 * (1.0 + 0.15 * mach * mach)
+        | opsrocket_core::component::NoseShape::Haack => {
+            // POWER / PARABOLIC / HAACK tables also start at zero or near-
+            // zero subsonic.  We use the same approximation: cdMach0
+            // multiplied by a tiny Mach correction.
+            cd_mach_0 * (1.0 + 0.15 * mach * mach)
+        }
+    }
 }
 
 fn transition_pressure_drag(t: &Transition, _mach: f64, area_ref: f64) -> f64 {
@@ -482,7 +602,7 @@ fn body_friction_correction(length: f64, max_radius: f64) -> f64 {
 ///
 /// The `(s/D_ref)²` factor already references the result to A_ref = π/4 D²,
 /// so no additional `Af/A_ref` rescaling is needed (and would be incorrect).
-fn fins_cn_alpha(f: &FinSet, body_radius: f64, area_ref: f64) -> (f64, f64) {
+fn fins_cn_alpha(f: &FinSet, body_radius: f64, area_ref: f64, mach: f64) -> (f64, f64) {
     let s = f.height;
     if s <= 0.0 || f.root_chord + f.tip_chord <= 0.0 {
         return (0.0, 0.0);
@@ -494,10 +614,14 @@ fn fins_cn_alpha(f: &FinSet, body_radius: f64, area_ref: f64) -> (f64, f64) {
 
     // Java FinSetCalc.calculateFinCNa1 (subsonic branch, M < ~0.9):
     //   CNa1 = 2π · s² / (1 + sqrt(1 + (1 − M²) · (s² / (Af · cos Γ))²)) / refArea
-    // The result is already normalised to refArea.
-    let mach = 0.0_f64; // mach not currently threaded into aero call
+    // The (1 − M²) factor is the Prandtl-Glauert subsonic compressibility
+    // correction; matches Java line-for-line for mach < CNA_SUBSONIC (~0.9).
+    // Above ~0.9 Java switches to a transonic blend, then a supersonic
+    // formula. We keep the subsonic branch only (rocket fixtures stay
+    // below Mach 0.5).
+    let m_eff = mach.min(0.9);
     let inner = pow2(s * s / (fin_area.max(1e-12) * cos_gamma));
-    let denom = 1.0 + (1.0 + (1.0 - mach * mach) * inner).sqrt();
+    let denom = 1.0 + (1.0 + (1.0 - m_eff * m_eff) * inner).sqrt();
     let cn_alpha_iso = 2.0 * PI * s * s / denom / area_ref;
 
     // Body-fin interference: K_fb = 1 + r/(s+r).
@@ -525,18 +649,85 @@ fn fins_cn_alpha(f: &FinSet, body_radius: f64, area_ref: f64) -> (f64, f64) {
     (cn_a_set, cp)
 }
 
+/// Java TubeCalc.calculatePressureCD — internal-flow pressure drag for a
+/// hollow cylindrical component (inner tube, launch lug).
+///
+///   Re   = v · D_inner / ν
+///   f    = 0.25 / (log10(ε/(3.7·D) + 5.74/Re^0.9))²   (Swamee-Jain)
+///   Δp   = f · L · ρ · v² / (2 · D)                   (Darcy-Weissbach)
+///   tubeCD = 2 · Δp / (ρ · v²) = f · L / D
+///   cd   = (tubeCD · innerArea + 0.7·(stagnationCD + baseCD)·frontalArea) / refArea
+///
+/// We use a fixed pipe roughness ε = 60 µm (matches Java's default
+/// "Normal" finish) and `stagnationCD ≈ 1` for low Mach.
+fn tube_internal_pressure_cd(
+    outer_r: f64,
+    inner_r: f64,
+    length: f64,
+    fc: FlightConditions,
+    area_ref: f64,
+) -> f64 {
+    if inner_r <= 0.0 || length <= 0.0 || area_ref <= 1e-12 {
+        return 0.0;
+    }
+    let diameter = 2.0 * inner_r;
+    let inner_area = PI * inner_r * inner_r;
+    let frontal_area = PI * (outer_r * outer_r - inner_r * inner_r).max(0.0);
+    let epsilon = 60.0e-6_f64; // surface roughness
+    // Reynolds based on tube diameter and the rocket's current speed; we
+    // approximate v from fc.reynolds·length-equivalent.  fc.reynolds in our
+    // engine is ρ·v/ν (per unit length), so v·D/ν = fc.reynolds · D.
+    let re = (fc.reynolds * diameter).max(1.0e3);
+    let term = epsilon / (3.7 * diameter) + 5.74 / re.powf(0.9);
+    let log = term.log10();
+    let f_factor = 0.25 / (log * log);
+    let tube_cd = f_factor * length / diameter;
+    let stagnation = 1.0_f64; // M ≈ 0 stagnation Cd
+    let base = 0.12_f64;
+    (tube_cd * inner_area + 0.7 * (stagnation + base) * frontal_area) / area_ref
+}
+
 fn fin_friction_drag(f: &FinSet, cf: f64, area_ref: f64) -> f64 {
     let af = 0.5 * (f.root_chord + f.tip_chord) * f.height;
     let wetted = 2.0 * af * f.fin_count as f64;
     cf * wetted / area_ref
 }
 
-fn fin_pressure_drag(f: &FinSet, _mach: f64, area_ref: f64) -> f64 {
-    // Hoerner leading-edge drag per fin: Cd_LE ≈ 0.135 · (t/c).
-    let cr = f.root_chord.max(1e-6);
-    let cd_le = 0.135 * (f.thickness / cr);
-    let af = 0.5 * (f.root_chord + f.tip_chord) * f.height;
-    cd_le * (af * f.fin_count as f64) / area_ref
+fn fin_pressure_drag(f: &FinSet, mach: f64, area_ref: f64) -> f64 {
+    // Java FinSetCalc.calculatePressureCD (subsonic branch):
+    //   round / airfoil:  Cd_LE = (1 − M²)^(−0.417) − 1   (≈ 0 at low M)
+    //   square:           Cd_LE = stagnation Cd ≈ 1.0
+    // Then multiplied by cos²(γ_lead) and by `span · thickness / refArea`.
+    //
+    // Java also adds a *base* drag for the trailing edge (rounded fins:
+    // base/2; square: base; airfoil: 0).  We include that here so the
+    // pressure-drag column matches Java more closely.
+    if f.height <= 0.0 {
+        return 0.0;
+    }
+    let cd_le_norm = match f.cross_section {
+        opsrocket_core::component::FinCrossSection::Airfoil
+        | opsrocket_core::component::FinCrossSection::Rounded => {
+            let m = mach.min(0.9);
+            (1.0 - m * m).powf(-0.417) - 1.0
+        }
+        opsrocket_core::component::FinCrossSection::Square => 1.0, // stagnation
+    };
+    // Slanted leading edge: cos²(γ_lead). Lead-edge sweep ≈ atan(sweep_length / height).
+    let lead_sweep = (f.sweep_length / f.height.max(1e-9)).atan();
+    let cos2_lead = lead_sweep.cos().powi(2);
+    let cd_le = cd_le_norm * cos2_lead * f.height * f.thickness / area_ref;
+    // Trailing-edge base drag at the fin root: baseCD/2 for rounded (and
+    // for airfoil = 0). For our standard rounded fin section this is the
+    // dominant fin-pressure contribution at low Mach.
+    let cd_base_per_fin = match f.cross_section {
+        opsrocket_core::component::FinCrossSection::Rounded => 0.06,
+        opsrocket_core::component::FinCrossSection::Square => 0.12,
+        opsrocket_core::component::FinCrossSection::Airfoil => 0.0,
+    } * f.height
+        * f.thickness
+        / area_ref;
+    f.fin_count as f64 * (cd_le + cd_base_per_fin)
 }
 
 #[cfg(test)]

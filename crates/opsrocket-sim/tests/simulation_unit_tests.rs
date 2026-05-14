@@ -57,6 +57,7 @@ fn rk4_freefall_matches_analytic() {
         moment_of_inertia_long: 1.0,
         body_lift_planform_term: 0.0,
         body_lift_cp: 0.0,
+        pitch_damping_mul: 0.0,
     };
     let mut s = State::at_rest(100.0, 1.0, 0.0);
     let dt = 0.01;
@@ -92,6 +93,7 @@ fn rk4_integrates_mass_loss_linearly() {
         moment_of_inertia_long: 1.0,
         body_lift_planform_term: 0.0,
         body_lift_cp: 0.0,
+        pitch_damping_mul: 0.0,
     };
     let mut s = State::at_rest(1000.0, 1.0, 0.0);
     for _ in 0..100 {
