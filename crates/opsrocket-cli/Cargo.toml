@@ -1,0 +1,17 @@
+[package]
+name = "opsrocket-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Command-line driver for OpsRocket"
+
+[[bin]]
+name = "opsrocket"
+path = "src/main.rs"
+
+[dependencies]
+opsrocket-core = { workspace = true }
+opsrocket-io   = { workspace = true }
+opsrocket-sim  = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }

@@ -1,0 +1,39 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/opsrocket-core",
+    "crates/opsrocket-io",
+    "crates/opsrocket-sim",
+    "crates/opsrocket-cli",
+    "crates/opsrocket-tests",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/ops/opsrocket"
+authors = ["OpsRocket contributors"]
+description = "OpsRocket - a Rust rewrite of the OpenRocket model rocket simulator core"
+
+[workspace.dependencies]
+opsrocket-core = { path = "crates/opsrocket-core" }
+opsrocket-io   = { path = "crates/opsrocket-io" }
+opsrocket-sim  = { path = "crates/opsrocket-sim" }
+
+nalgebra = "0.33"
+serde = { version = "1", features = ["derive"] }
+serde-xml-rs = "0.6"
+quick-xml = { version = "0.36", features = ["serialize"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+thiserror = "1"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+csv = "1"
+approx = "0.5"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

@@ -1,0 +1,16 @@
+[package]
+name = "opsrocket-io"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "File I/O for OpsRocket: .ork reader/writer and motor file parsers"
+
+[dependencies]
+opsrocket-core = { workspace = true }
+quick-xml = { workspace = true }
+zip = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+approx = { workspace = true }

@@ -1,0 +1,10 @@
+; Estes E12
+; Public RASP-format thrust curve, derived from manufacturer spec.
+E12 24 95 0-4-6-8 0.03540 0.0571 Estes
+   0.052 24.0
+   0.144 32.5
+   0.300 21.0
+   0.500 14.0
+   1.000 11.8
+   2.350 11.0
+   2.701 0.0

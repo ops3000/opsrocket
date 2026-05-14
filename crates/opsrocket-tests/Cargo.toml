@@ -1,0 +1,15 @@
+[package]
+name = "opsrocket-tests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "End-to-end regression tests for OpsRocket"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+opsrocket-core = { workspace = true }
+opsrocket-io   = { workspace = true }
+opsrocket-sim  = { workspace = true }
+approx = { workspace = true }

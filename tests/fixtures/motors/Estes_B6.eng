@@ -1,0 +1,10 @@
+; Estes B6
+; Public RASP-format thrust curve, derived from manufacturer spec.
+B6 18 70 0-2-4-6 0.00567 0.0188 Estes
+   0.046 6.0
+   0.168 11.0
+   0.234 7.0
+   0.300 5.2
+   0.480 4.8
+   0.700 4.0
+   0.870 0.0
