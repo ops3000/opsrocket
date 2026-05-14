@@ -49,8 +49,14 @@ fn rk4_freefall_matches_analytic() {
         cd: 0.0,
         area_ref: 0.0,
         mass_dot: &mass_dot,
+        cn_alpha: 0.0,
+        reference_length: 0.025,
+        cp_axial: 0.0,
+        cg_axial: 0.0,
+        moment_of_inertia_rot: 1.0,
+        moment_of_inertia_long: 1.0,
     };
-    let mut s = State { t: 0.0, pos: Vec3::new(0.0, 0.0, 100.0), vel: Vec3::zeros(), pitch: 0.0, mass: 1.0 };
+    let mut s = State::at_rest(100.0, 1.0, 0.0);
     let dt = 0.01;
     for _ in 0..100 {
         s = rk4_step(&s, dt, &sampler);
@@ -76,8 +82,14 @@ fn rk4_integrates_mass_loss_linearly() {
         cd: 0.0,
         area_ref: 0.0,
         mass_dot: &mass_dot,
+        cn_alpha: 0.0,
+        reference_length: 0.025,
+        cp_axial: 0.0,
+        cg_axial: 0.0,
+        moment_of_inertia_rot: 1.0,
+        moment_of_inertia_long: 1.0,
     };
-    let mut s = State { t: 0.0, pos: Vec3::new(0.0, 0.0, 1000.0), vel: Vec3::zeros(), pitch: 0.0, mass: 1.0 };
+    let mut s = State::at_rest(1000.0, 1.0, 0.0);
     for _ in 0..100 {
         s = rk4_step(&s, 0.01, &sampler);
     }

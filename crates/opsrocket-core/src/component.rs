@@ -194,8 +194,48 @@ pub struct Parachute {
     pub line_count: u32,
     #[serde(default)]
     pub line_length: f64,
+    /// Material of the shroud lines (line-density). `None` falls back to
+    /// the canopy material in legacy files where no separate line material
+    /// is specified.
+    #[serde(default)]
+    pub line_material: Option<Material>,
     pub packed_length: f64,
     pub packed_radius: f64,
+}
+
+/// Shock cord component (separate from a generic mass object because its
+/// mass is computed from the cord length and a line-density material).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ShockCord {
+    pub common: Common,
+    pub cord_length: f64,
+    /// Packed bundle for rendering; not used for mass.
+    pub packed_length: f64,
+    pub packed_radius: f64,
+}
+
+/// Launch lug — a small tube glued to the body for the launch rod.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LaunchLug {
+    pub common: Common,
+    pub length: f64,
+    pub outer_radius: f64,
+    pub inner_radius: f64,
+    #[serde(default = "default_lug_count")]
+    pub instance_count: u32,
+}
+
+fn default_lug_count() -> u32 { 1 }
+
+/// Centering ring — a thin annulus joining an inner tube to a body tube.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CenteringRing {
+    pub common: Common,
+    pub length: f64,
+    pub outer_radius: f64,
+    pub inner_radius: f64,
+    #[serde(default = "default_lug_count")]
+    pub instance_count: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -277,6 +317,9 @@ pub enum Component {
     FinSet(FinSet),
     MassObject(MassObject),
     Parachute(Parachute),
+    ShockCord(ShockCord),
+    LaunchLug(LaunchLug),
+    CenteringRing(CenteringRing),
 }
 
 impl Component {
@@ -289,6 +332,9 @@ impl Component {
             Component::FinSet(c) => &c.common,
             Component::MassObject(c) => &c.common,
             Component::Parachute(c) => &c.common,
+            Component::ShockCord(c) => &c.common,
+            Component::LaunchLug(c) => &c.common,
+            Component::CenteringRing(c) => &c.common,
         }
     }
 
@@ -302,6 +348,9 @@ impl Component {
             Component::FinSet(c) => c.root_chord,
             Component::MassObject(c) => c.length,
             Component::Parachute(c) => c.packed_length,
+            Component::ShockCord(c) => c.packed_length,
+            Component::LaunchLug(c) => c.length,
+            Component::CenteringRing(c) => c.length,
         }
     }
 
@@ -316,10 +365,31 @@ impl Component {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SeparationEvent {
+    /// Never separate (default for the sustainer stage).
+    #[default]
+    Never,
+    /// Separate when the lower stage's motor burns out.
+    Burnout,
+    /// Separate when the lower stage's motor fires its ejection charge.
+    Ejection,
+    /// Separate when the upper stage's motor ignites.
+    UpperIgnition,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Stage {
     pub common: Common,
     pub children: Vec<Component>,
+    /// When this stage separates from the one above it (i.e. drops below).
+    /// Only meaningful for non-sustainer (booster) stages.
+    #[serde(default)]
+    pub separation_event: SeparationEvent,
+    /// Optional delay after the separation event (s).
+    #[serde(default)]
+    pub separation_delay: f64,
 }
 
 pub type AxialStage = Stage;

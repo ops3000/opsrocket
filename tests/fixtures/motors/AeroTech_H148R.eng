@@ -1,0 +1,11 @@
+; AeroTech H148R
+; RASP-format approximation of the AeroTech 29mm H148R reloadable motor.
+H148R 29 230 6-8-10 0.0764 0.1840 AeroTech
+   0.030 200.0
+   0.100 220.0
+   0.300 175.0
+   0.700 160.0
+   1.200 150.0
+   1.700 140.0
+   1.950 25.0
+   1.980 0.0

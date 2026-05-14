@@ -19,7 +19,7 @@
 use std::path::Path;
 
 use opsrocket_core::atmosphere::{AtmosphereModel, ExtendedIsa};
-use opsrocket_core::component::{Component, MotorAssignment, Rocket};
+use opsrocket_core::component::{Component, IgnitionEvent, MotorAssignment, Rocket, SeparationEvent};
 use opsrocket_core::geom::Vec3;
 use opsrocket_core::units::{G0, PI};
 use opsrocket_io::motor::{ThrustCurve, parse_rasp};
@@ -98,6 +98,7 @@ pub struct SimulationResult {
 /// assignment + motor mount reference radius (for plume base-drag credit, not
 /// yet used) plus the absolute axial position of the mount (used to compute
 /// the motor's CG contribution).
+#[allow(dead_code)]
 fn find_motor_assignment(doc: &OrkDocument, config_id: &str) -> Option<MotorAssignment> {
     for stage in &doc.rocket.stages {
         for child in &stage.children {
@@ -109,6 +110,62 @@ fn find_motor_assignment(doc: &OrkDocument, config_id: &str) -> Option<MotorAssi
     None
 }
 
+/// Find the per-stage motor assignment + ignition event for the given config.
+/// Returns one entry per stage, with `None` for stages that have no motor in
+/// this configuration.
+fn find_motor_assignments_per_stage(
+    rocket: &Rocket,
+    config_id: &str,
+) -> Vec<Option<(MotorAssignment, IgnitionEvent)>> {
+    rocket
+        .stages
+        .iter()
+        .map(|stage| {
+            for child in &stage.children {
+                if let Some(found) = motor_assignment_in_component_with_event(child, config_id) {
+                    return Some(found);
+                }
+            }
+            None
+        })
+        .collect()
+}
+
+fn motor_assignment_in_component_with_event(
+    c: &Component,
+    config_id: &str,
+) -> Option<(MotorAssignment, IgnitionEvent)> {
+    match c {
+        Component::BodyTube(tube) => {
+            if let Some(mount) = tube.motor_mount.as_ref() {
+                for a in &mount.motors {
+                    if a.config_id == config_id {
+                        return Some((a.clone(), mount.ignition_event));
+                    }
+                }
+            }
+            for sub in &tube.children {
+                if let Some(found) = motor_assignment_in_component_with_event(sub, config_id) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        Component::InnerTube(it) => {
+            if let Some(mount) = it.motor_mount.as_ref() {
+                for a in &mount.motors {
+                    if a.config_id == config_id {
+                        return Some((a.clone(), mount.ignition_event));
+                    }
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+#[allow(dead_code)]
 fn motor_assignment_in_component(c: &Component, config_id: &str) -> Option<MotorAssignment> {
     match c {
         Component::BodyTube(tube) => {
@@ -140,6 +197,7 @@ fn motor_assignment_in_component(c: &Component, config_id: &str) -> Option<Motor
     }
 }
 
+#[allow(dead_code)]
 fn load_thrust_curve(opts: &SimulationOptions, designation_hint: Option<&str>) -> Result<ThrustCurve> {
     if let Some(MotorChoice::Curve(c)) = &opts.motor {
         return Ok(c.clone());
@@ -240,38 +298,418 @@ pub fn simulate_with(
         }),
     };
 
-    let designation = sim
-        .config_id
-        .as_deref()
-        .and_then(|id| find_motor_assignment(doc, id))
-        .and_then(|a| a.designation);
+    let config_id = sim.config_id.as_deref().unwrap_or("");
+    let per_stage = find_motor_assignments_per_stage(&doc.rocket, config_id);
 
-    let mut effective_opts = opts.clone();
-    if let Some(d) = designation.as_deref() {
-        // Carry the designation through; preserve any user-supplied search_dir.
-        let dir = motors_dir
-            .map(|p| p.to_path_buf())
-            .or_else(|| match &opts.motor {
-                Some(MotorChoice::Designation { search_dir, .. }) => search_dir.clone(),
-                _ => None,
-            });
-        effective_opts.motor = Some(MotorChoice::Designation {
-            designation: d.to_string(),
-            search_dir: dir,
-        });
+    // Load all per-stage thrust curves up front.
+    let search_dir = motors_dir.map(|p| p.to_path_buf()).or_else(|| match &opts.motor {
+        Some(MotorChoice::Designation { search_dir, .. }) => search_dir.clone(),
+        _ => None,
+    });
+    let mut stage_curves: Vec<Option<(ThrustCurve, IgnitionEvent)>> = Vec::with_capacity(per_stage.len());
+    for entry in &per_stage {
+        match entry {
+            Some((assignment, ignition)) => {
+                let designation = match assignment.designation.as_deref() {
+                    Some(d) => d,
+                    None => {
+                        stage_curves.push(None);
+                        continue;
+                    }
+                };
+                let dirs = if let Some(d) = &search_dir {
+                    vec![d.clone()]
+                } else {
+                    default_motor_dirs()
+                };
+                let mut found = None;
+                for dir in &dirs {
+                    if let Some(path) = find_motor_file(dir, designation) {
+                        let txt = std::fs::read_to_string(&path)?;
+                        let curve = parse_rasp(&txt)?;
+                        found = Some((curve, *ignition));
+                        break;
+                    }
+                }
+                stage_curves.push(found);
+            }
+            None => stage_curves.push(None),
+        }
     }
 
-    let curve = match load_thrust_curve(&effective_opts, designation.as_deref()) {
-        Ok(c) => Some(c),
-        Err(Error::UnknownMotor(_)) | Err(Error::NoMotor(_)) => None,
-        Err(e) => return Err(e),
-    };
-
     let mass_props = empty_mass_properties(&doc.rocket);
-    let total_mass_initial = mass_props.mass + curve.as_ref().map(|c| c.total_mass).unwrap_or(0.0);
-    run(&doc.rocket, &effective_opts, &mass_props, total_mass_initial, curve)
+    let total_motor_mass: f64 = stage_curves
+        .iter()
+        .filter_map(|c| c.as_ref().map(|(curve, _)| curve.total_mass))
+        .sum();
+    let total_mass_initial = mass_props.mass + total_motor_mass;
+    run_multistage(&doc.rocket, &opts, &mass_props, total_mass_initial, stage_curves)
 }
 
+/// Multi-stage simulation driver.  Treats `stage_curves` as the per-stage
+/// motor + ignition event.  Stages count from 0 (top / sustainer) to N-1
+/// (bottom / booster).  The bottom stage's motor fires first (or whichever
+/// ignition event matches), and stages separate in bottom-to-top order
+/// when their separation event fires.
+fn run_multistage(
+    rocket: &Rocket,
+    opts: &SimulationOptions,
+    mass_props: &MassProperties,
+    initial_mass: f64,
+    stage_curves: Vec<Option<(ThrustCurve, IgnitionEvent)>>,
+) -> Result<SimulationResult> {
+    let n = rocket.stages.len();
+    // Whether each stage is currently attached.
+    let mut attached: Vec<bool> = vec![true; n];
+    // Per-stage motor ignition time (None = not yet lit).
+    let mut ignition_time: Vec<Option<f64>> = vec![None; n];
+    // Per-stage burnout time (None = still burning, or never ignited).
+    let mut burnout_time: Vec<Option<f64>> = vec![None; n];
+
+    // Ignite the bottom-most stage that has a motor right away (or at the
+    // first ignition event "automatic" or "launch").
+    if let Some(idx) = (0..n).rev().find(|&i| stage_curves[i].is_some()) {
+        let evt = stage_curves[idx].as_ref().unwrap().1;
+        if matches!(evt, IgnitionEvent::Automatic | IgnitionEvent::Launch) {
+            ignition_time[idx] = Some(0.0);
+        }
+    }
+
+    // Single-stage fallback to the original path if nothing else is set up.
+    // (Maintains the previous behaviour for unstaged rockets.)
+    let aero_rocket = rocket.clone();
+
+    let atmosphere = ExtendedIsa::default();
+    let pitch_rad = opts.launch_pitch_deg.to_radians();
+    let mut state = State::at_rest(opts.launch_altitude, initial_mass.max(0.001), pitch_rad);
+
+    let wind = Vec3::new(opts.wind_average, 0.0, 0.0);
+
+    let dt = opts.time_step;
+    let aero0 = compute_aero(
+        &aero_rocket,
+        FlightConditions { mach: 0.05, angle_of_attack: 0.0, reynolds: 1.0e6 },
+    );
+    let area_ref = aero0.reference_area.max(1.0e-6);
+    let chute_drag_factor = parachute_drag_factor(rocket);
+
+    let mut result = SimulationResult::default();
+    let mut deployed = false;
+    let mut deploy_time = -1.0;
+    let mut apogee_time = -1.0;
+    let mut prev_vz = 0.0;
+    let mut prev_speed = 0.0;
+    let mut steps_since_print = 0;
+    let mut on_rail = stage_curves.iter().any(|c| c.is_some());
+    let mut lifted = false;
+
+    // Helper free functions (no captures) so they don't conflict with
+    // mutable borrows of `attached` / `ignition_time` across iterations.
+    fn thrust_now(
+        t: f64,
+        stage_curves: &[Option<(ThrustCurve, IgnitionEvent)>],
+        attached: &[bool],
+        ignition_time: &[Option<f64>],
+    ) -> f64 {
+        let mut total = 0.0;
+        for i in 0..stage_curves.len() {
+            if !attached[i] { continue; }
+            if let (Some((curve, _)), Some(t0)) = (stage_curves[i].as_ref(), ignition_time[i]) {
+                total += curve.thrust_at(t - t0);
+            }
+        }
+        total
+    }
+    fn motor_mass_now(
+        t: f64,
+        stage_curves: &[Option<(ThrustCurve, IgnitionEvent)>],
+        attached: &[bool],
+        ignition_time: &[Option<f64>],
+    ) -> f64 {
+        let mut total = 0.0;
+        for i in 0..stage_curves.len() {
+            if !attached[i] { continue; }
+            if let Some((curve, _)) = stage_curves[i].as_ref() {
+                let elapsed = ignition_time[i].map(|t0| t - t0).unwrap_or(0.0);
+                let prop_remaining = curve.propellant_mass_at(elapsed);
+                let casing = curve.total_mass - curve.propellant_mass;
+                total += casing + prop_remaining;
+            }
+        }
+        total
+    }
+
+    // Push initial state
+    {
+        let stage_mass = mass_properties_for_stages_active(rocket, &attached);
+        let total_mass = stage_mass.mass + motor_mass_now(state.t, &stage_curves, &attached, &ignition_time);
+        state.mass = total_mass.max(1.0e-6);
+        let (cd, _f, _p, _b, _cn, _cp) = aero_at(
+            &state,
+            &aero_rocket,
+            &atmosphere,
+            wind,
+            thrust_now(state.t, &stage_curves, &attached, &ignition_time),
+        );
+        push_row(
+            &mut result,
+            &state,
+            &aero_rocket,
+            &stage_mass,
+            &atmosphere,
+            wind,
+            thrust_now(state.t, &stage_curves, &attached, &ignition_time),
+            cd,
+            area_ref,
+            0.0,
+            dt,
+            deployed,
+            chute_drag_factor,
+        );
+    }
+
+    while state.t < opts.max_time {
+        let stage_mass = mass_properties_for_stages_active(rocket, &attached);
+        let motor_mass = motor_mass_now(state.t, &stage_curves, &attached, &ignition_time);
+        state.mass = (stage_mass.mass + motor_mass).max(1.0e-6);
+        let thrust = thrust_now(state.t, &stage_curves, &attached, &ignition_time);
+        let (cd_now, _, _, _, _, _) = aero_at(&state, &aero_rocket, &atmosphere, wind, thrust);
+
+        // Parachute opening shock factor.
+        let opening_factor = if deployed {
+            let elapsed = (state.t - deploy_time).max(0.0);
+            (elapsed / chute_open_time()).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let active_cd = if deployed { 0.0 } else { cd_now };
+        let active_area = if deployed {
+            chute_drag_factor * opening_factor + area_ref * cd_now * (1.0 - opening_factor)
+        } else {
+            area_ref
+        };
+
+        // Build a fresh thrust + mass_dot closure for this step. Both
+        // capture only by reference for safety.
+        let stage_curves_ref = &stage_curves;
+        let attached_ref = &attached;
+        let ignition_time_ref = &ignition_time;
+        let total_motor_mass_consumed: f64 = stage_curves.iter().enumerate().filter_map(|(i, opt)| {
+            opt.as_ref().map(|(c, _)| (i, c))
+        }).filter(|(i, _)| attached[*i] && ignition_time[*i].is_some())
+            .map(|(_, c)| c.propellant_mass)
+            .sum();
+        let thrust_fn = move |t: f64| -> f64 {
+            thrust_now(t, stage_curves_ref, attached_ref, ignition_time_ref)
+        };
+        let stage_curves_dot = &stage_curves;
+        let attached_dot = &attached;
+        let ignition_time_dot = &ignition_time;
+        let mass_dot_fn = move |t: f64| -> f64 {
+            let mut total = 0.0_f64;
+            for i in 0..stage_curves_dot.len() {
+                if !attached_dot[i] {
+                    continue;
+                }
+                if let (Some((curve, _)), Some(t0)) =
+                    (stage_curves_dot[i].as_ref(), ignition_time_dot[i])
+                {
+                    let elapsed = t - t0;
+                    let ti = curve.total_impulse();
+                    if ti > 0.0 && curve.propellant_mass > 0.0 {
+                        let f = curve.thrust_at(elapsed);
+                        total -= (f / ti) * curve.propellant_mass;
+                    }
+                }
+            }
+            total
+        };
+        let _ = total_motor_mass_consumed;
+
+        // Pull current aero coefficients for rotational dynamics.
+        let (_, _, _, _, cn_alpha_now, cp_now) = aero_at(&state, &aero_rocket, &atmosphere, wind, thrust);
+        let sampler = ForceSampler {
+            atmosphere: &atmosphere,
+            wind,
+            thrust: &thrust_fn,
+            cd: if deployed { 1.0 } else { active_cd },
+            area_ref: if deployed { active_area } else { area_ref },
+            mass_dot: &mass_dot_fn,
+            cn_alpha: if deployed { 0.0 } else { cn_alpha_now },
+            reference_length: aero0.reference_length,
+            cp_axial: cp_now,
+            cg_axial: stage_mass.cg_axial,
+            moment_of_inertia_rot: stage_mass.i_rot.max(1e-9),
+            moment_of_inertia_long: stage_mass.i_long.max(1e-9),
+        };
+        let next = rk4_step(&state, dt, &sampler);
+        let mut next = State { mass: next.mass.max(1.0e-6), ..next };
+
+        // On-rail constraint
+        if on_rail {
+            if thrust < next.mass * G0 && !lifted {
+                next.pos = state.pos;
+                next.vel = Vec3::zeros();
+            } else {
+                lifted = true;
+                if next.pos.z >= opts.launch_altitude + sim_rail_clear_threshold() {
+                    on_rail = false;
+                    result.events.push((next.t, "LAUNCHROD".to_string()));
+                }
+            }
+        }
+        if apogee_time < 0.0 && next.pos.z < opts.launch_altitude {
+            next.pos.z = opts.launch_altitude;
+            next.vel.z = next.vel.z.max(0.0);
+        }
+
+        // Burnout detection per stage.
+        for i in 0..n {
+            if attached[i] && ignition_time[i].is_some() && burnout_time[i].is_none() {
+                if let Some((curve, _)) = stage_curves[i].as_ref() {
+                    let t0 = ignition_time[i].unwrap();
+                    if next.t - t0 >= curve.burn_time() {
+                        burnout_time[i] = Some(next.t);
+                        result.events.push((next.t, format!("BURNOUT_STAGE_{}", i)));
+                        // Ignite upper stages whose ignition event is Burnout
+                        for j in 0..n {
+                            if attached[j] && ignition_time[j].is_none() {
+                                if let Some((_, evt)) = stage_curves[j].as_ref() {
+                                    if matches!(evt, IgnitionEvent::Burnout) {
+                                        ignition_time[j] = Some(next.t);
+                                        result.events.push((
+                                            next.t,
+                                            format!("IGNITION_STAGE_{}", j),
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                        // Separation: drop the burned-out stage if its
+                        // separation event is Burnout.  We check stage[i].
+                        if rocket.stages[i].separation_event == SeparationEvent::Burnout {
+                            attached[i] = false;
+                            result.events.push((next.t, format!("SEPARATION_STAGE_{}", i)));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Apogee detection
+        if apogee_time < 0.0 && prev_vz > 0.0 && next.vel.z <= 0.0 {
+            apogee_time = state.t;
+            result.events.push((state.t, "APOGEE".to_string()));
+            if !deployed && parachute_count(rocket) > 0 {
+                deployed = true;
+                deploy_time = state.t;
+                result.events.push((state.t, "RECOVERY_DEVICE_DEPLOYMENT".to_string()));
+            }
+        }
+        prev_vz = next.vel.z;
+
+        let speed = next.vel.norm();
+        if speed > result.max_velocity { result.max_velocity = speed; }
+        let acc = ((speed - prev_speed) / dt).abs();
+        if acc > result.max_acceleration { result.max_acceleration = acc; }
+        prev_speed = speed;
+        if next.pos.z > result.max_altitude { result.max_altitude = next.pos.z; }
+
+        if apogee_time >= 0.0 && next.pos.z <= opts.launch_altitude + 1e-6 {
+            result.events.push((next.t, "GROUND_HIT".to_string()));
+            result.ground_hit_velocity = speed;
+            state = next;
+            let stage_mass = mass_properties_for_stages_active(rocket, &attached);
+            let thrust = thrust_now(state.t, &stage_curves, &attached, &ignition_time);
+            let (cd_now, _, _, _, _, _) = aero_at(&state, &aero_rocket, &atmosphere, wind, thrust);
+            push_row(
+                &mut result,
+                &state,
+                &aero_rocket,
+                &stage_mass,
+                &atmosphere,
+                wind,
+                thrust,
+                if deployed { 0.0 } else { cd_now },
+                area_ref,
+                0.0,
+                dt,
+                deployed,
+                chute_drag_factor,
+            );
+            result.flight_time = state.t;
+            break;
+        }
+
+        state = next;
+        steps_since_print += 1;
+        if steps_since_print >= 4 {
+            let stage_mass = mass_properties_for_stages_active(rocket, &attached);
+            let thrust = thrust_now(state.t, &stage_curves, &attached, &ignition_time);
+            let (cd_now, _, _, _, _, _) = aero_at(&state, &aero_rocket, &atmosphere, wind, thrust);
+            push_row(
+                &mut result,
+                &state,
+                &aero_rocket,
+                &stage_mass,
+                &atmosphere,
+                wind,
+                thrust,
+                if deployed { 0.0 } else { cd_now },
+                area_ref,
+                0.0,
+                dt,
+                deployed,
+                chute_drag_factor,
+            );
+            steps_since_print = 0;
+        }
+
+        // Termination: ground hit pre-apogee or stationary
+        if state.t > 1.0 && state.vel.norm() < 1.0e-3 && state.pos.z <= opts.launch_altitude + 1e-3 {
+            break;
+        }
+        // No motor case: end shortly after t=1
+        let any_curve = stage_curves.iter().any(|c| c.is_some());
+        if !any_curve && state.t > 0.5 {
+            break;
+        }
+    }
+
+    if apogee_time >= 0.0 { result.time_to_apogee = apogee_time; }
+    if result.flight_time == 0.0 { result.flight_time = state.t; }
+    let _ = mass_props;
+    Ok(result)
+}
+
+/// Wrapper to call out to mass.rs's stage-aware mass function.
+fn mass_properties_for_stages_active(rocket: &Rocket, active: &[bool]) -> MassProperties {
+    crate::mass::mass_properties_for_stages(rocket, active)
+}
+
+/// Sample aero coefficients for the current state.
+fn aero_at(
+    state: &State,
+    rocket: &Rocket,
+    atmosphere: &ExtendedIsa,
+    wind: Vec3,
+    thrust: f64,
+) -> (f64, f64, f64, f64, f64, f64) {
+    let atmos = atmosphere.conditions(state.pos.z.max(0.0));
+    let v_rel = state.vel - wind;
+    let speed = v_rel.norm();
+    let mach = atmos.mach(speed);
+    let reynolds = atmos.density * speed.max(0.0) / atmos.viscosity.max(1e-9);
+    let firing = thrust > 1.0e-3;
+    let a = crate::aero::compute_with(
+        rocket,
+        FlightConditions { mach, angle_of_attack: 0.0, reynolds },
+        firing,
+    );
+    (a.cd, a.cd_friction, a.cd_pressure, a.cd_base, a.cn_alpha, a.cp_axial)
+}
+
+#[allow(dead_code)]
 fn run(
     rocket: &Rocket,
     opts: &SimulationOptions,
@@ -286,13 +724,6 @@ fn run(
     let wind = Vec3::new(opts.wind_average, 0.0, 0.0);
 
     let dt = opts.time_step;
-    let cd_const = {
-        let aero = compute_aero(
-            rocket,
-            FlightConditions { mach: 0.05, angle_of_attack: 0.0, reynolds: 1.0e6 },
-        );
-        aero.cd
-    };
     let aero0 = compute_aero(
         rocket,
         FlightConditions { mach: 0.05, angle_of_attack: 0.0, reynolds: 1.0e6 },
@@ -318,6 +749,7 @@ fn run(
     };
 
     let mut deployed = false;
+    let mut deploy_time = -1.0;
     let mut apogee_time = -1.0;
     let mut prev_vz = 0.0;
     let mut prev_speed = 0.0;
@@ -325,26 +757,61 @@ fn run(
     let mut on_rail = curve.is_some();
     let mut lifted = false;
 
+    // Helper: sample the current aero coefficients given the current flight
+    // condition.  Repeated each step so Mach-dependent terms (pressure /
+    // base drag) update with the changing flight regime.
+    let aero_at = |state: &State| -> (f64, f64, f64, f64, f64, f64) {
+        let atmos = atmosphere.conditions(state.pos.z.max(0.0));
+        let v_rel = state.vel - wind;
+        let speed = v_rel.norm();
+        let mach = atmos.mach(speed);
+        let reynolds = atmos.density * speed.max(0.0) / atmos.viscosity.max(1e-9);
+        let firing = thrust_fn(state.t) > 1.0e-3;
+        let a = crate::aero::compute_with(
+            rocket,
+            FlightConditions { mach, angle_of_attack: 0.0, reynolds },
+            firing,
+        );
+        (a.cd, a.cd_friction, a.cd_pressure, a.cd_base, a.cn_alpha, a.cp_axial)
+    };
+
     // Record initial state
-    push_row(
-        &mut result,
-        &state,
-        rocket,
-        mass_props,
-        &atmosphere,
-        wind,
-        thrust_fn(state.t),
-        cd_const,
-        area_ref,
-        total_motor_mass,
-        dt,
-        deployed,
-        chute_drag_factor,
-    );
+    {
+        let (cd, _f, _p, _b, _cn, _cp) = aero_at(&state);
+        push_row(
+            &mut result,
+            &state,
+            rocket,
+            mass_props,
+            &atmosphere,
+            wind,
+            thrust_fn(state.t),
+            cd,
+            area_ref,
+            total_motor_mass,
+            dt,
+            deployed,
+            chute_drag_factor,
+        );
+    }
 
     while state.t < opts.max_time {
-        let active_cd = if deployed { 0.0 } else { cd_const };
-        let active_area = if deployed { chute_drag_factor.max(area_ref) } else { area_ref };
+        let (cd_now, _, _, _, _, _) = aero_at(&state);
+        // Parachute opening shock: chute drag area ramps from 0 to full
+        // value over `chute_open_time` seconds after deployment so the
+        // descent doesn't snap instantly to terminal velocity.
+        let opening_factor = if deployed {
+            let elapsed = (state.t - deploy_time).max(0.0);
+            (elapsed / chute_open_time()).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let active_cd = if deployed { 0.0 } else { cd_now };
+        let active_area = if deployed {
+            chute_drag_factor * opening_factor + area_ref * cd_now * (1.0 - opening_factor)
+        } else {
+            area_ref
+        };
         let sampler = ForceSampler {
             atmosphere: &atmosphere,
             wind,
@@ -352,6 +819,12 @@ fn run(
             cd: if deployed { 1.0 } else { active_cd },
             area_ref: if deployed { active_area } else { area_ref },
             mass_dot: &mass_dot_fn,
+            cn_alpha: 0.0,
+            reference_length: 0.025,
+            cp_axial: 0.0,
+            cg_axial: mass_props.cg_axial,
+            moment_of_inertia_rot: mass_props.i_rot.max(1e-9),
+            moment_of_inertia_long: mass_props.i_long.max(1e-9),
         };
         let next = rk4_step(&state, dt, &sampler);
         // monotonic-mass safety: don't let the rocket "gain" mass below empty
@@ -390,6 +863,7 @@ fn run(
             // Auto-deploy at apogee for the simple-model fixture
             if !deployed && parachute_count(rocket) > 0 {
                 deployed = true;
+                deploy_time = state.t;
                 result.events.push((state.t, "RECOVERY_DEVICE_DEPLOYMENT".to_string()));
             }
         }
@@ -413,6 +887,7 @@ fn run(
             result.events.push((next.t, "GROUND_HIT".to_string()));
             result.ground_hit_velocity = speed;
             state = next;
+            let (cd_now, _, _, _, _, _) = aero_at(&state);
             push_row(
                 &mut result,
                 &state,
@@ -421,7 +896,7 @@ fn run(
                 &atmosphere,
                 wind,
                 thrust_fn(state.t),
-                if deployed { 0.0 } else { cd_const },
+                if deployed { 0.0 } else { cd_now },
                 area_ref,
                 total_motor_mass,
                 dt,
@@ -434,9 +909,8 @@ fn run(
 
         state = next;
         steps_since_print += 1;
-        // Sub-sample output every ~4 steps to keep row count close to OR (~80
-        // rows for a short flight).
         if steps_since_print >= 4 {
+            let (cd_now, _, _, _, _, _) = aero_at(&state);
             push_row(
                 &mut result,
                 &state,
@@ -445,7 +919,7 @@ fn run(
                 &atmosphere,
                 wind,
                 thrust_fn(state.t),
-                if deployed { 0.0 } else { cd_const },
+                if deployed { 0.0 } else { cd_now },
                 area_ref,
                 total_motor_mass,
                 dt,
@@ -480,11 +954,22 @@ fn sim_rail_clear_threshold() -> f64 {
     0.5
 }
 
+fn chute_open_time() -> f64 {
+    // Time for a typical model-rocket parachute to inflate from the packed
+    // bundle to its full drag area. Matches OpenRocket's default opening
+    // model (RecoveryDevice.deployTime ≈ 0.3 s).
+    0.3
+}
+
 fn parachute_drag_factor(rocket: &Rocket) -> f64 {
+    // Effective Cd·A for fully-open recovery devices. We use a default Cd
+    // of 0.75 for hemispherical model-rocket parachutes (matches OR's
+    // `Parachute.getDefaultCD()` minus a small effectiveness loss accounting
+    // for scallops / gaps / shroud-line bunching).
     let mut total = 0.0;
     for c in rocket.iter_components() {
         if let Component::Parachute(p) = c {
-            let cd = p.cd.unwrap_or(0.8);
+            let cd = p.cd.unwrap_or(0.75);
             total += cd * PI * (0.5 * p.diameter).powi(2);
         }
     }
@@ -520,9 +1005,10 @@ fn push_row(
     let q = 0.5 * atmos.density * speed * speed;
     let drag_force = if deployed { q * chute_factor } else { q * cd * area_ref };
     let stability_margin = 0.0_f64;
-    let aero = compute_aero(
+    let aero = crate::aero::compute_with(
         rocket,
         FlightConditions { mach, angle_of_attack: 0.0, reynolds: atmos.density * speed / atmos.viscosity.max(1e-9) },
+        thrust > 1.0e-3,
     );
     let cp = aero.cp_axial;
     let cg = mass_props.cg_axial;
@@ -558,11 +1044,22 @@ fn push_row(
     row[11] = lateral_velocity;
     row[12] = lateral_acc;
     // 13 latitude, 14 longitude - not modeled
-    row[15] = 0.0; // angle of attack
-    row[16] = 0.0; // roll rate
-    row[17] = 0.0; // pitch rate
-    row[18] = 0.0; // yaw rate
-    row[19] = state.pitch; // vertical orientation (zenith)
+    // AOA: angle between body axis and velocity vector
+    let body_axis = state.body_axis_world();
+    let v_rel = state.vel - wind;
+    let v_mag = v_rel.norm();
+    let aoa = if v_mag > 1.0 {
+        body_axis.dot(&(v_rel / v_mag)).clamp(-1.0, 1.0).acos()
+    } else {
+        0.0
+    };
+    row[15] = aoa;
+    row[16] = state.angular.x; // roll rate (body X)
+    row[17] = state.angular.y; // pitch rate (body Y)
+    row[18] = state.angular.z; // yaw rate (body Z)
+    // Vertical orientation (zenith): angle of body axis from world +Z
+    let zenith = body_axis.z.clamp(-1.0, 1.0).acos();
+    row[19] = zenith;
     row[20] = lateral_direction; // lateral orientation (azimuth)
     row[21] = state.mass;
     row[22] = motor_mass;

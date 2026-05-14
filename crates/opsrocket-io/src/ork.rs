@@ -14,9 +14,10 @@ use std::io::Read;
 use std::path::Path;
 
 use opsrocket_core::component::{
-    BodyTube, Common, Component, ComponentId, DeployEvent, FinCrossSection, FinSet,
-    FlightConfiguration, IgnitionEvent, InnerTube, MassObject, MotorAssignment, MotorMount,
-    NoseCone, NoseShape, Parachute, ReferenceType, Rocket, Stage, Transition,
+    BodyTube, CenteringRing, Common, Component, ComponentId, DeployEvent, FinCrossSection, FinSet,
+    FlightConfiguration, IgnitionEvent, InnerTube, LaunchLug, MassObject, MotorAssignment,
+    MotorMount, NoseCone, NoseShape, Parachute, ReferenceType, Rocket, SeparationEvent, ShockCord,
+    Stage, Transition,
 };
 use opsrocket_core::material::{Material, MaterialType};
 
@@ -241,6 +242,16 @@ fn parse_stage(reader: &mut Reader<&[u8]>) -> Result<Stage> {
                 match n.as_ref() {
                     b"name" => stage.common.name = read_text(reader, b"name")?,
                     b"id" => stage.common.id = ComponentId::new(read_text(reader, b"id")?),
+                    b"separationevent" => {
+                        let v = read_text(reader, b"separationevent")?;
+                        stage.separation_event = match v.as_str() {
+                            "burnout" => SeparationEvent::Burnout,
+                            "ejection" => SeparationEvent::Ejection,
+                            "upperignition" => SeparationEvent::UpperIgnition,
+                            _ => SeparationEvent::Never,
+                        };
+                    }
+                    b"separationdelay" => stage.separation_delay = parse_f64(reader, b"separationdelay")?,
                     b"subcomponents" => {
                         stage.children = parse_children(reader)?;
                     }
@@ -272,10 +283,13 @@ fn parse_children(reader: &mut Reader<&[u8]>) -> Result<Vec<Component>> {
                         let tag = n.as_ref().to_vec();
                         Some(Component::FinSet(parse_finset(reader, &tag)?))
                     }
-                    b"masscomponent" | b"shockcord" => {
+                    b"masscomponent" => {
                         Some(Component::MassObject(parse_mass_object(reader, n.as_ref())?))
                     }
+                    b"shockcord" => Some(Component::ShockCord(parse_shockcord(reader)?)),
                     b"parachute" => Some(Component::Parachute(parse_parachute(reader)?)),
+                    b"launchlug" => Some(Component::LaunchLug(parse_launchlug(reader)?)),
+                    b"centeringring" => Some(Component::CenteringRing(parse_centeringring(reader)?)),
                     _ => {
                         skip_to_end(reader, n.as_ref())?;
                         None
@@ -358,7 +372,8 @@ fn parse_material(
     start: &quick_xml::events::BytesStart<'_>,
     reader: &mut Reader<&[u8]>,
 ) -> Result<Option<Material>> {
-    // <material type="bulk" density="1050.0" group="Plastics">Polystyrene</material>
+    // Used for both <material> and <linematerial> blocks; the closing tag
+    // name must match the opening name we were given.
     let mut kind = MaterialType::Bulk;
     let mut density = 0.0_f64;
     let mut group: Option<String> = None;
@@ -377,7 +392,8 @@ fn parse_material(
             _ => {}
         }
     }
-    let name = read_text(reader, b"material")?;
+    let close_tag = start.name().as_ref().to_vec();
+    let name = read_text(reader, &close_tag)?;
     Ok(Some(Material { name, kind, density, group }))
 }
 
@@ -662,6 +678,7 @@ fn parse_parachute(reader: &mut Reader<&[u8]>) -> Result<Parachute> {
         deploy_delay: 0.0,
         line_count: 0,
         line_length: 0.0,
+        line_material: None,
         packed_length: 0.0,
         packed_radius: 0.0,
     };
@@ -691,6 +708,7 @@ fn parse_parachute(reader: &mut Reader<&[u8]>) -> Result<Parachute> {
                         b"deploydelay" => p.deploy_delay = parse_f64(reader, b"deploydelay")?,
                         b"linecount" => p.line_count = parse_u32(reader, b"linecount")?,
                         b"linelength" => p.line_length = parse_f64(reader, b"linelength")?,
+                        b"linematerial" => p.line_material = parse_material(&e, reader)?,
                         b"packedlength" => p.packed_length = parse_f64(reader, b"packedlength")?,
                         b"packedradius" => p.packed_radius = parse_f64(reader, b"packedradius")?,
                         other => skip_to_end(reader, other)?,
@@ -704,6 +722,120 @@ fn parse_parachute(reader: &mut Reader<&[u8]>) -> Result<Parachute> {
         buf.clear();
     }
     Ok(p)
+}
+
+fn parse_shockcord(reader: &mut Reader<&[u8]>) -> Result<ShockCord> {
+    let mut s = ShockCord {
+        common: Common::new("", "Shock cord"),
+        cord_length: 0.0,
+        packed_length: 0.0,
+        packed_radius: 0.0,
+    };
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf)? {
+            Event::Start(e) => {
+                let n = e.name();
+                if parse_common_field(&mut s.common, &e, reader)? {
+                    /* handled */
+                } else {
+                    match n.as_ref() {
+                        b"cordlength" => s.cord_length = parse_f64(reader, b"cordlength")?,
+                        b"packedlength" => s.packed_length = parse_f64(reader, b"packedlength")?,
+                        b"packedradius" => s.packed_radius = parse_f64(reader, b"packedradius")?,
+                        other => skip_to_end(reader, other)?,
+                    }
+                }
+            }
+            Event::End(e) if e.name().as_ref() == b"shockcord" => break,
+            Event::Eof => return Err(Error::Malformed("EOF inside <shockcord>".into())),
+            _ => {}
+        }
+        buf.clear();
+    }
+    Ok(s)
+}
+
+fn parse_launchlug(reader: &mut Reader<&[u8]>) -> Result<LaunchLug> {
+    let mut l = LaunchLug {
+        common: Common::new("", "Launch lug"),
+        length: 0.0,
+        outer_radius: 0.0,
+        inner_radius: 0.0,
+        instance_count: 1,
+    };
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf)? {
+            Event::Start(e) => {
+                let n = e.name();
+                if parse_common_field(&mut l.common, &e, reader)? {
+                    /* handled */
+                } else {
+                    match n.as_ref() {
+                        b"length" => l.length = parse_f64(reader, b"length")?,
+                        b"radius" => {
+                            l.outer_radius = parse_f64(reader, b"radius")?;
+                            if l.inner_radius == 0.0 {
+                                l.inner_radius = (l.outer_radius - 0.0005).max(0.0);
+                            }
+                        }
+                        b"outerradius" => l.outer_radius = parse_f64(reader, b"outerradius")?,
+                        b"innerradius" => l.inner_radius = parse_f64(reader, b"innerradius")?,
+                        b"thickness" => {
+                            let t = parse_f64(reader, b"thickness")?;
+                            l.inner_radius = (l.outer_radius - t).max(0.0);
+                        }
+                        b"instancecount" => l.instance_count = parse_u32(reader, b"instancecount")?.max(1),
+                        other => skip_to_end(reader, other)?,
+                    }
+                }
+            }
+            Event::End(e) if e.name().as_ref() == b"launchlug" => break,
+            Event::Eof => return Err(Error::Malformed("EOF inside <launchlug>".into())),
+            _ => {}
+        }
+        buf.clear();
+    }
+    Ok(l)
+}
+
+fn parse_centeringring(reader: &mut Reader<&[u8]>) -> Result<CenteringRing> {
+    let mut c = CenteringRing {
+        common: Common::new("", "Centering ring"),
+        length: 0.0,
+        outer_radius: 0.0,
+        inner_radius: 0.0,
+        instance_count: 1,
+    };
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf)? {
+            Event::Start(e) => {
+                let n = e.name();
+                if parse_common_field(&mut c.common, &e, reader)? {
+                    /* handled */
+                } else {
+                    match n.as_ref() {
+                        b"length" => c.length = parse_f64(reader, b"length")?,
+                        b"outerradius" => {
+                            c.outer_radius = parse_f64_or_auto(reader, b"outerradius")?.unwrap_or(0.0);
+                        }
+                        b"innerradius" => {
+                            c.inner_radius = parse_f64_or_auto(reader, b"innerradius")?.unwrap_or(0.0);
+                        }
+                        b"instancecount" => c.instance_count = parse_u32(reader, b"instancecount")?.max(1),
+                        other => skip_to_end(reader, other)?,
+                    }
+                }
+            }
+            Event::End(e) if e.name().as_ref() == b"centeringring" => break,
+            Event::Eof => return Err(Error::Malformed("EOF inside <centeringring>".into())),
+            _ => {}
+        }
+        buf.clear();
+    }
+    Ok(c)
 }
 
 fn parse_motor_mount(reader: &mut Reader<&[u8]>) -> Result<MotorMount> {

@@ -1,0 +1,11 @@
+; AeroTech G80T
+; RASP-format approximation of the AeroTech G80T-class composite motor.
+G80T 29 95 4-7-10 0.0413 0.1090 AeroTech
+   0.020 130.0
+   0.080 135.0
+   0.200 110.0
+   0.400 90.0
+   0.800 80.0
+   1.200 65.0
+   1.430 12.0
+   1.450 0.0

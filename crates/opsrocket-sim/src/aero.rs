@@ -52,7 +52,19 @@ pub struct FlightConditions {
 }
 
 /// Compute Barrowman coefficients for the rocket at the given flight condition.
+/// Equivalent to `compute_with(rocket, fc, false)`.
 pub fn compute(rocket: &Rocket, fc: FlightConditions) -> AeroCoefficients {
+    compute_with(rocket, fc, false)
+}
+
+/// Compute Barrowman coefficients; `motor_firing` suppresses the base-drag
+/// term, matching the OpenRocket convention that an active motor pressurises
+/// the body's base region.
+pub fn compute_with(
+    rocket: &Rocket,
+    fc: FlightConditions,
+    motor_firing: bool,
+) -> AeroCoefficients {
     let layout = iter_layout(rocket);
 
     // Reference area uses the maximum body diameter.
@@ -91,8 +103,6 @@ pub fn compute(rocket: &Rocket, fc: FlightConditions) -> AeroCoefficients {
                 cd_friction += friction_drag(t.length, 0.5 * (t.fore_radius + t.aft_radius) * 2.0, fc, area_ref);
             }
             Component::FinSet(f) => {
-                // Use the body radius at the fin's leading edge as the reference
-                // body radius for fin-body interference.
                 let body_radius = local_body_radius(&layout, *axial_start).unwrap_or(0.0);
                 let (cn_a, cp) = fins_cn(f, body_radius, area_ref);
                 cn_alpha_total += cn_a;
@@ -100,21 +110,24 @@ pub fn compute(rocket: &Rocket, fc: FlightConditions) -> AeroCoefficients {
                 cd_pressure += fin_pressure_drag(f, fc.mach, area_ref);
                 cd_friction += fin_friction_drag(f, fc, area_ref);
             }
+            Component::LaunchLug(l) => {
+                // Niskanen §3.4.4: launch-lug interference drag.
+                // We model only friction over the lug's wetted area; pressure
+                // drag is captured by the parasitic "interference" factor in
+                // the friction term for simplicity.
+                let d = 2.0 * l.outer_radius;
+                cd_friction += friction_drag(l.length, d, fc, area_ref) * (l.instance_count as f64);
+            }
             _ => {}
         }
     }
 
-    // Base drag: applied at the very aft of the bottom-most body tube. The
-    // Barrowman base drag uses the cross-sectional area exposed to free
-    // stream; for a typical model rocket with an open aft tube and no nozzle
-    // protrusion, this is the body's cross-section minus the nozzle area.
-    // We use the Hoerner approximation Cd_base = 0.12 + 0.13 * M^2 below
-    // Mach 1.
-    let m = fc.mach.min(1.0);
-    cd_base += 0.12 + 0.13 * m * m;
-    // Reduce base drag while motor is firing (open nozzle pressurised). The
-    // engine layer adjusts this at simulation time via the `thrust` flag, but
-    // for the static aero call we report the unpowered value.
+    // Base drag (subsonic): Hoerner / Niskanen §3.4.3.  An active motor
+    // pressurises the base annulus and effectively eliminates this term.
+    if !motor_firing {
+        let m = fc.mach.min(1.0);
+        cd_base = 0.12 + 0.13 * m * m;
+    }
 
     let cp_axial = if cn_alpha_total.abs() > 1e-9 {
         cn_x_sum / cn_alpha_total

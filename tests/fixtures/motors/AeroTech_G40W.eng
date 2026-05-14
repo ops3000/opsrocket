@@ -1,0 +1,11 @@
+; AeroTech G40W
+; RASP-format approximation of the AeroTech G40-class composite motor.
+G40W 29 124 4-7-10 0.0431 0.1090 AeroTech
+   0.020 55.0
+   0.080 60.0
+   0.300 48.0
+   1.000 42.0
+   2.000 40.0
+   2.500 38.0
+   2.900 10.0
+   2.920 0.0

@@ -1,0 +1,11 @@
+; AeroTech I59WN
+; RASP-format approximation of the AeroTech 38mm I59WN composite motor.
+I59WN 38 230 8-10-12 0.0987 0.2370 AeroTech
+   0.050 80.0
+   0.200 95.0
+   0.800 70.0
+   3.000 60.0
+   6.000 55.0
+   8.000 45.0
+   8.530 15.0
+   8.560 0.0

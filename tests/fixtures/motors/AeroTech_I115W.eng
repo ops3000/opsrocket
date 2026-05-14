@@ -1,0 +1,11 @@
+; AeroTech I115W
+; RASP-format approximation of the AeroTech 29mm I115W reloadable motor.
+I115W 29 295 6-9-12 0.0976 0.2350 AeroTech
+   0.030 160.0
+   0.150 175.0
+   0.500 145.0
+   1.500 130.0
+   3.000 115.0
+   3.700 100.0
+   4.300 30.0
+   4.330 0.0

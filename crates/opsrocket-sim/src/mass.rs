@@ -12,7 +12,8 @@
 //! approximated as a half-cone shell for moments-of-inertia purposes (the
 //! Java code uses the same approximation in `SymmetricComponent.calculateMOI`).
 
-use opsrocket_core::component::{Common, Component, NoseCone, Rocket, Stage};
+use opsrocket_core::component::{CenteringRing, Common, Component, LaunchLug, NoseCone, Rocket, ShockCord, Stage};
+use opsrocket_core::material::MaterialType;
 use opsrocket_core::geom::Coord;
 use opsrocket_core::mathx::pow2;
 use opsrocket_core::units::PI;
@@ -32,19 +33,29 @@ pub struct MassProperties {
 
 /// Compute the empty (no motor) mass properties of the rocket.
 pub fn empty_mass_properties(rocket: &Rocket) -> MassProperties {
+    let mask: Vec<bool> = (0..rocket.stages.len()).map(|_| true).collect();
+    mass_properties_for_stages(rocket, &mask)
+}
+
+/// Mass / CG / MoI for the subset of stages whose mask bit is true. Stages
+/// whose bit is false are treated as separated (no longer part of the
+/// vehicle). Lower stages remain in axial layout to keep CG references
+/// stable while a vehicle decomposes during flight.
+pub fn mass_properties_for_stages(rocket: &Rocket, active: &[bool]) -> MassProperties {
+    let resolved = resolve_auto_dimensions(rocket);
     let mut acc = Accumulator::default();
     let mut origin = 0.0;
     let mut prev_aft = 0.0;
-    for stage in &rocket.stages {
+    for (i, stage) in resolved.stages.iter().enumerate() {
+        let include = active.get(i).copied().unwrap_or(true);
         let layout = layout_children(&stage.children, origin, prev_aft);
-        for (comp, layout) in layout {
-            accumulate(&mut acc, comp, layout.axial_start);
-            // body components push the cursor forward
-            if let Component::BodyTube(t) = comp {
-                let r = t.radius.unwrap_or(0.0);
-                for (sub, sub_layout) in layout_children(&t.children, layout.axial_start, layout.axial_start) {
-                    accumulate(&mut acc, sub, sub_layout.axial_start);
-                    let _ = r;
+        if include {
+            for (comp, layout) in &layout {
+                accumulate(&mut acc, comp, layout.axial_start);
+                if let Component::BodyTube(t) = comp {
+                    for (sub, sub_layout) in layout_children(&t.children, layout.axial_start, layout.axial_start) {
+                        accumulate(&mut acc, sub, sub_layout.axial_start);
+                    }
                 }
             }
         }
@@ -54,6 +65,45 @@ pub fn empty_mass_properties(rocket: &Rocket) -> MassProperties {
         }
     }
     acc.finish()
+}
+
+/// Resolve auto-sized dimensions (centering ring radii, launch lug thickness, etc.)
+/// by inferring from neighboring components. Returns a cloned rocket with the
+/// fields filled in; the input is not mutated.
+pub fn resolve_auto_dimensions(rocket: &Rocket) -> Rocket {
+    let mut r = rocket.clone();
+    for stage in &mut r.stages {
+        for child in &mut stage.children {
+            if let Component::BodyTube(tube) = child {
+                let tube_inner = tube.radius.map(|outer| (outer - tube.thickness).max(0.0));
+                // Find the first inner tube to provide a reference inner-radius.
+                let inner_outer = tube
+                    .children
+                    .iter()
+                    .find_map(|c| if let Component::InnerTube(it) = c { Some(it.outer_radius) } else { None });
+                for sub in &mut tube.children {
+                    match sub {
+                        Component::CenteringRing(cr) => {
+                            if cr.outer_radius == 0.0 {
+                                if let Some(t) = tube_inner { cr.outer_radius = t; }
+                            }
+                            if cr.inner_radius == 0.0 {
+                                if let Some(io) = inner_outer { cr.inner_radius = io; }
+                            }
+                        }
+                        Component::LaunchLug(lug) => {
+                            if lug.inner_radius == 0.0 || lug.inner_radius >= lug.outer_radius {
+                                // Fall back to a 0.5 mm wall if the file doesn't specify one.
+                                lug.inner_radius = (lug.outer_radius - 0.0005).max(0.0);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    r
 }
 
 struct ChildLayout {
@@ -159,40 +209,159 @@ fn accumulate(acc: &mut Accumulator, comp: &Component, axial_start: f64) {
             acc.add(total_mass, cg, i_long, i_rot_local);
         }
         Component::Parachute(p) => {
-            let mass_each = if let Some(mat) = p.common.material.as_ref() {
-                let area = PI * pow2(0.5 * p.diameter);
-                mat.density * area
+            // Canopy mass uses the parachute's own (surface) material.
+            let canopy_mass = if let Some(mat) = p.common.material.as_ref() {
+                if matches!(mat.kind, MaterialType::Surface) {
+                    let area = PI * pow2(0.5 * p.diameter);
+                    mat.density * area
+                } else {
+                    0.0
+                }
             } else {
                 0.0
             };
-            let mass = override_mass(&p.common, mass_each);
+            // Lines: use the separate line material if available, otherwise
+            // fall back to the canopy material if it happens to be a line.
+            let line_density = p
+                .line_material
+                .as_ref()
+                .filter(|m| matches!(m.kind, MaterialType::Line))
+                .map(|m| m.density)
+                .or_else(|| {
+                    p.common.material.as_ref().and_then(|m| {
+                        if matches!(m.kind, MaterialType::Line) { Some(m.density) } else { None }
+                    })
+                })
+                .unwrap_or(0.0);
+            let line_mass = line_density * p.line_length * p.line_count as f64;
+            let mass = override_mass(&p.common, canopy_mass + line_mass);
             let cg = override_cg(&p.common, axial_start + 0.5 * p.packed_length);
             acc.add(mass, cg, 0.0, 0.0);
         }
+        Component::ShockCord(s) => add_shockcord(acc, s, axial_start),
+        Component::LaunchLug(l) => add_launchlug(acc, l, axial_start),
+        Component::CenteringRing(c) => add_centering_ring(acc, c, axial_start),
     }
 }
 
-fn add_nosecone(acc: &mut Accumulator, n: &NoseCone, axial_start: f64) {
-    let mass = override_mass(
-        &n.common,
-        if let Some(mat) = n.common.material.as_ref() {
-            // Approximate as a thin shell of a cone of the given length / base radius.
-            // Surface area ~ pi * r * sqrt(r^2 + L^2).
-            let r = n.aft_radius;
-            let area = PI * r * (r * r + n.length * n.length).sqrt();
-            area * n.thickness * mat.density
+fn add_shockcord(acc: &mut Accumulator, s: &ShockCord, axial_start: f64) {
+    let line_density = s
+        .common
+        .material
+        .as_ref()
+        .filter(|m| matches!(m.kind, MaterialType::Line))
+        .map(|m| m.density)
+        .unwrap_or(0.0);
+    let mass = override_mass(&s.common, line_density * s.cord_length);
+    let cg = override_cg(&s.common, axial_start + 0.5 * s.packed_length);
+    acc.add(mass, cg, 0.0, 0.0);
+}
+
+fn add_launchlug(acc: &mut Accumulator, l: &LaunchLug, axial_start: f64) {
+    let mass_each = if let Some(mat) = l.common.material.as_ref() {
+        if matches!(mat.kind, MaterialType::Bulk) {
+            let area = PI * (pow2(l.outer_radius) - pow2(l.inner_radius));
+            area * l.length * mat.density
         } else {
             0.0
-        },
-    );
-    // CG of a cone (solid) is at L/4 from base. Use that for shell-with-thin-wall
-    // as an acceptable approximation (Java code uses 0.25L for ogive too).
-    let cg_local = 0.75 * n.length;
-    let cg = override_cg(&n.common, axial_start + cg_local);
-    let r = n.aft_radius;
-    let i_long = mass * 0.5 * r * r * 0.5; // shell ≈ 0.5 m r^2; scale by 0.5 for cone
-    let i_rot_local = mass * (3.0 * r * r + n.length * n.length) / 20.0;
-    acc.add(mass, cg, i_long, i_rot_local);
+        }
+    } else {
+        0.0
+    };
+    let total = override_mass(&l.common, mass_each * l.instance_count as f64);
+    let cg = override_cg(&l.common, axial_start + 0.5 * l.length);
+    let i_long = 0.5 * total * (pow2(l.outer_radius) + pow2(l.inner_radius));
+    let i_rot_local = total
+        * (3.0 * (pow2(l.outer_radius) + pow2(l.inner_radius)) + pow2(l.length))
+        / 12.0;
+    acc.add(total, cg, i_long, i_rot_local);
+}
+
+fn add_centering_ring(acc: &mut Accumulator, c: &CenteringRing, axial_start: f64) {
+    let mass_each = if let Some(mat) = c.common.material.as_ref() {
+        if matches!(mat.kind, MaterialType::Bulk) {
+            let area = PI * (pow2(c.outer_radius) - pow2(c.inner_radius));
+            area * c.length * mat.density
+        } else {
+            0.0
+        }
+    } else {
+        0.0
+    };
+    let total = override_mass(&c.common, mass_each * c.instance_count as f64);
+    let cg = override_cg(&c.common, axial_start + 0.5 * c.length);
+    let i_long = 0.5 * total * (pow2(c.outer_radius) + pow2(c.inner_radius));
+    let i_rot_local = total
+        * (3.0 * (pow2(c.outer_radius) + pow2(c.inner_radius)) + pow2(c.length))
+        / 12.0;
+    acc.add(total, cg, i_long, i_rot_local);
+}
+
+fn add_nosecone(acc: &mut Accumulator, n: &NoseCone, axial_start: f64) {
+    // Main shell mass.
+    let (shell_mass, shell_cg) = if let Some(mat) = n.common.material.as_ref() {
+        let r = n.aft_radius;
+        let area = PI * r * (r * r + n.length * n.length).sqrt();
+        let m = area * n.thickness * mat.density;
+        // CG of a cone shell is at 2/3 L from the nose tip (so 1/3 L from base);
+        // OpenRocket uses 0.75 L from the tip for filled cone solids. For the
+        // shell-with-thin-wall approximation we use 2/3 L from tip = L * 0.667.
+        // We retain 0.75 L for compatibility with the Java reference's
+        // convention for ogives.
+        (m, axial_start + 0.75 * n.length)
+    } else {
+        (0.0, axial_start + 0.5 * n.length)
+    };
+
+    // Aft shoulder (a small cylindrical extension that plugs into the body tube).
+    let (shoulder_mass, shoulder_cg) = nosecone_shoulder_mass(n, axial_start);
+
+    // Treat the override as applying to the whole nose-cone assembly (shell + shoulder).
+    let total_computed = shell_mass + shoulder_mass;
+    let total = override_mass(&n.common, total_computed);
+    if total > 0.0 && total_computed > 0.0 {
+        // Combine the shell + shoulder CGs as a weighted average; scale per
+        // the override so a user-supplied mass still has the right CG.
+        let combined_cg = (shell_mass * shell_cg + shoulder_mass * shoulder_cg) / total_computed;
+        let cg = override_cg(&n.common, combined_cg);
+        let r = n.aft_radius;
+        let i_long = total * 0.5 * r * r * 0.5;
+        let i_rot_local = total * (3.0 * r * r + n.length * n.length) / 20.0;
+        acc.add(total, cg, i_long, i_rot_local);
+    } else if total > 0.0 {
+        let cg = override_cg(&n.common, axial_start + 0.75 * n.length);
+        let r = n.aft_radius;
+        let i_long = total * 0.5 * r * r * 0.5;
+        let i_rot_local = total * (3.0 * r * r + n.length * n.length) / 20.0;
+        acc.add(total, cg, i_long, i_rot_local);
+    }
+}
+
+fn nosecone_shoulder_mass(n: &NoseCone, axial_start: f64) -> (f64, f64) {
+    if n.aft_shoulder_length <= 0.0 || n.aft_shoulder_radius <= 0.0 {
+        return (0.0, 0.0);
+    }
+    let mat = match n.common.material.as_ref() {
+        Some(m) => m,
+        None => return (0.0, 0.0),
+    };
+    if !matches!(mat.kind, MaterialType::Bulk) {
+        return (0.0, 0.0);
+    }
+    let r_outer = n.aft_shoulder_radius;
+    let r_inner = (r_outer - n.aft_shoulder_thickness).max(0.0);
+    let wall_volume = PI * (r_outer * r_outer - r_inner * r_inner) * n.aft_shoulder_length;
+    let wall_mass = wall_volume * mat.density;
+    let mut total = wall_mass;
+    let cap_mass = if n.aft_shoulder_capped {
+        let cap_vol = PI * r_inner * r_inner * n.aft_shoulder_thickness;
+        cap_vol * mat.density
+    } else {
+        0.0
+    };
+    total += cap_mass;
+    let cg = axial_start + n.length + 0.5 * n.aft_shoulder_length;
+    (total, cg)
 }
 
 fn add_bodytube(acc: &mut Accumulator, b: &opsrocket_core::component::BodyTube, axial_start: f64) {
@@ -268,6 +437,15 @@ fn override_mass(c: &Common, computed: f64) -> f64 {
 
 fn override_cg(c: &Common, computed: f64) -> f64 {
     c.cg_override.unwrap_or(computed)
+}
+
+/// Return the mass contribution of a single component in isolation.  This is a
+/// helper used by debug tooling.  Walks the same accumulator path as the full
+/// rocket calc but stops at a single component.
+pub fn single_component_mass(c: &Component) -> f64 {
+    let mut acc = Accumulator::default();
+    accumulate(&mut acc, c, 0.0);
+    acc.finish().mass
 }
 
 /// Walk through all stages and yield each component plus its axial start position.

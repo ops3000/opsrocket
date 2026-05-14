@@ -12,6 +12,8 @@
 
 pub mod motor;
 pub mod ork;
+pub mod writer;
 
 pub use motor::{ThrustCurve, ThrustPoint, parse_rasp};
 pub use ork::{CachedSimulation, FlightDataPoint, OrkDocument, read_ork};
+pub use writer::{render_xml, write_ork};

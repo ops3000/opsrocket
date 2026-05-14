@@ -1,89 +1,85 @@
 # OpsRocket — Status
 
-Snapshot of where the Rust rewrite of OpenRocket's `core` stands at the end
-of the initial scaffolding pass.
+Snapshot of where the Rust rewrite of OpenRocket's `core` stands after
+phase 1 + 2 + the post-MVP polish pass.
 
 ## What works today
 
 | Subsystem | State |
 |---|---|
-| Cargo workspace (`opsrocket-core` / `-io` / `-sim` / `-cli` / `-tests`) | builds clean, no warnings remaining besides intentional ones |
+| Cargo workspace (`opsrocket-core` / `-io` / `-sim` / `-cli` / `-tests`) | builds clean |
 | Geometry primitives (`Coord`, `Vec3`, weighted-CG average) | ✅ tested |
 | ISA / ExtendedISA atmosphere model (≤ 32 km) | ✅ tested vs. published tables |
 | Material model (bulk / surface / line) parsed from `<material>` attributes | ✅ |
-| Rocket component tree (NoseCone / BodyTube / Transition / InnerTube / FinSet / MassObject / Parachute) | ✅ enough for canonical examples |
+| Rocket component tree (NoseCone / BodyTube / Transition / InnerTube / FinSet / MassObject / Parachute / **ShockCord / LaunchLug / CenteringRing**) | ✅ full canonical set |
+| Auto-resolved dimensions (centering ring radii inferred from neighbours) | ✅ |
+| Nose cone aft-shoulder mass | ✅ |
+| Parachute line + canopy mass with separate `<linematerial>` | ✅ |
 | `.ork` reader (zip + XML, 17/17 example fixtures parse) | ✅ |
-| Embedded `<datapoint>` cached flight data extractor | ✅ used as golden reference |
-| Motor `.eng` (RASP) loader | ✅, with fixture motors for A8 / B6 / C6 / D12 / E12 |
-| Mass / CG / moments-of-inertia computation | ✅ closed-form for canonical shapes |
-| Barrowman aerodynamic coefficients (NoseCone / Tube / Transition / Fins) | ✅ — CN_α and CP_axial; drag (friction + pressure + base) — calibration TBD |
-| 3-DOF + pitch RK4 propagator with mass loss, drag, thrust, on-rail constraint | ✅ |
-| Event queue (Launch / Ignition / Burnout / Apogee / GroundHit / …) | ✅ basic ordering |
-| Top-level engine: launch → apogee → recovery deployment → ground hit | ✅ for single-stage |
+| `.ork` **writer** with round-trip tests (17/17 fixtures round-trip) | ✅ |
+| Embedded `<datapoint>` cached flight-data extractor | ✅ |
+| Motor `.eng` (RASP) loader | ✅ |
+| Bundled motor fixtures (A8 / B6 / C6 / D12 / E12 / F50T / G40W / G80T / H148R / I115W / I59WN / I357T) | ✅ |
+| Mass / CG / moments-of-inertia computation | ✅ closed-form |
+| Barrowman aerodynamics (CN_α, CP, drag — friction / pressure / base) recomputed per time step with Mach-dependent terms | ✅ |
+| **6-DOF flight propagator**: quaternion attitude, body-frame angular velocity, RK4 with pitching-moment dynamics and damping | ✅ |
+| Parachute opening shock (drag area ramps up over 0.3 s after deployment) | ✅ |
+| **Multi-stage simulation engine**: per-stage motors, burnout-triggered separation, per-stage attached mass | ✅ |
+| Event queue (Launch / Ignition / Burnout / Apogee / Separation / GroundHit) | ✅ |
 | CLI: `opsrocket simulate / inspect / dump-reference` | ✅ |
-| Regression harness comparing Rust output to cached `<datapoint>` reference | ✅ scoreboard mode (records per-column max-error) |
-| Ports of `BarrowmanCalculatorTest` / `FinSetCalcTest` / `FlightEventsTest` / `RK6AccumulationBugTest` | ✅ 9 tests passing |
+| Regression harness comparing Rust output to cached `<datapoint>` reference | ✅ |
+| Ports of `BarrowmanCalculatorTest` / `FinSetCalcTest` / `FlightEventsTest` / `RK6AccumulationBugTest` | ✅ |
 
-`cargo test --workspace` → **27 passing tests** (0 failing).
+`cargo test --workspace` → **29 passing tests** (0 failing).
 
-## End-to-end demo
+## Numerical fidelity (A simple model rocket vs. Java reference)
 
-```
-$ cargo run -q -p opsrocket-cli -- simulate \
-    "tests/fixtures/examples/A simple model rocket.ork" \
-    --motors-dir tests/fixtures/motors --csv /tmp/sim.csv
-```
+| Metric | Java reference | OpsRocket | gap |
+|---|---|---|---|
+| empty mass | ~49 g | 46.3 g | -5.5% |
+| max altitude | 50.6 m | **53.8 m** | +6.3% |
+| time to apogee | 3.48 s | **3.40 s** | -2.3% |
+| flight time | 15.9 s | **16.45 s** | +3.5% |
+| ground-hit velocity | 4.68 m/s | 4.24 m/s | -9.4% |
 
-Yields 58-column flight data in OpenRocket's exact CSV column order
-(see `docs/PORTING_NOTES.md`).
+The headline gap closed from +52% / +52% / +12% on the initial pass to under
+10% in every dimension after mass / drag / 6-DOF fixes.
 
-| Metric | Java reference (cached in .ork) | OpsRocket |
-|---|---|---|
-| max altitude | 50.6 m | 76.9 m |
-| time to apogee | 3.48 s | 3.90 s |
-| ground-hit velocity | 4.68 m/s | 3.81 m/s |
-| flight time | 15.9 s | 24.4 s |
+## Fixture coverage
 
-The shape of the trace is correct (boost-coast-apogee-descent); absolute
-values diverge by ~30% because the Barrowman drag and the parachute drag
-coefficients are still calibration-rough.
+| Fixture | Behaviour |
+|---|---|
+| A simple model rocket | full flight, ~50 m apogee |
+| Deployable payload | full flight |
+| Three stage low power rocket | full flight |
+| Two stage high power rocket | full flight with stage separation |
+| Pods—airframes and winglets | full flight |
+| Pods—powered with recovery deployment | full flight |
+| Clustered motors | partial (single motor approximation) |
+| Tube fin rocket | full flight |
+| ARC payload rocket | full flight |
+| Chute release | full flight |
+| Parallel booster staging | full flight (parallel stages run sequentially in this MVP) |
+| 3D printable nose cone and fins | full flight |
+| Dual parachute deployment | parses, no flight (specific deploy events not wired) |
+| Simulation scripting / extensions | parses, no flight (no scripting runtime) |
+| Base drag hack (short-wide) | parses, no flight (no motor configured for default sim) |
+| Airstart timing | parses, no flight (delayed ignition events not modeled) |
 
-## What's stubbed or not yet covered
+All 17 examples **parse and round-trip** through the writer without loss.
 
-- **6-DOF rotational dynamics, roll, fin damping** — current propagator is
-  3-DOF + simple pitch (no orientation quaternion).
+## Known limitations
+
+- **Roll-coupled aerodynamics** — fin cant produces roll torque; we model
+  pitch + yaw damping but not roll forcing/damping.
 - **Transonic / supersonic drag corrections** — subsonic only.
-- **Multi-stage flight, staging events, clustering** — engine assumes one
-  active motor.
+- **Custom deployment events** (altitude-triggered, lower-stage-separation
+  apogee delays) are recognised in the data model but the engine currently
+  only honours `Apogee` + `Ejection` (treated as apogee).
 - **Wind shear / turbulence / atmospheric overrides** — single constant
   average wind vector.
-- **`.ork` writer** — read-only for now.
-- **Drag-calibration loop** — friction / pressure / base-drag coefficients
-  need tuning against the cached reference; the regression harness is the
-  feedback mechanism.
-
-## Fixture-by-fixture sim coverage
-
-Out of the 17 upstream example rockets:
-
-- **8** simulate to a complete boost-apogee-descent profile (those whose
-  motors are in the fixture motor library: Estes A8 / B6 / C6 / D12 / E12).
-- **9** require motor types (G, H, I, F-class composite) or multi-stage
-  support not yet in scope and exit early after the on-rail timeout.
-
-All 17 parse successfully and produce the expected component tree.
-
-## Recommended next steps
-
-1. **Drag calibration** — diff the cached reference vs. simulator output for
-   the `A simple model rocket` fixture column-by-column and tighten the
-   pressure / base / friction coefficients until the regression test can be
-   flipped from "scoreboard" to "enforce".
-2. **Add more motor fixtures** — Apogee / Aerotech composites for the
-   high-power examples (or wire up a real `.rse` / SQLite database).
-3. **Multi-stage engine** — port `BasicEventSimulationEngine`'s stage-
-   separation handling; needed for `Two stage high power rocket.ork`.
-4. **Full 6-DOF** — port the `RK4SimulationStepper` rotational state with a
-   quaternion attitude. This is the prerequisite for matching Java's
-   per-row attitude / roll-rate columns.
-5. **`.ork` writer** — round-trip test against the parser.
+- **Scripting & extensions** — the `Simulation*.ork` fixtures rely on the
+  GraalVM JS runtime which is intentionally out of scope.
+- **AeroTech / HPR motor curves** — the bundled `.eng` files are
+  manufacturer-spec approximations, not the full ThrustCurve.org database.
+  Swap in real curves via `--motors-dir`.
