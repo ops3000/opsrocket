@@ -5,7 +5,7 @@
 //! simulation engine never sees them; conversions happen at the file boundary.
 
 pub const G0: f64 = 9.80665; // standard gravity, m/s^2
-pub const R_AIR: f64 = 287.05287; // specific gas constant of dry air, J/(kg·K)
+pub const R_AIR: f64 = 287.053; // matches Java AtmosphericConditions.R
 pub const GAMMA_AIR: f64 = 1.4; // ratio of specific heats for air
 pub const ABSOLUTE_ZERO: f64 = -273.15; // °C
 pub const PI: f64 = std::f64::consts::PI;

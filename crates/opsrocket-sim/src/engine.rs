@@ -383,7 +383,10 @@ fn run_multistage(
     let pitch_rad = opts.launch_pitch_deg.to_radians();
     let mut state = State::at_rest(opts.launch_altitude, initial_mass.max(0.001), pitch_rad);
 
-    let wind = Vec3::new(opts.wind_average, 0.0, 0.0);
+    // Java convention (`PinkNoiseWindModel`): an "east wind" (direction = π/2)
+    // means wind blowing FROM east TOWARDS west, i.e. the wind velocity
+    // vector points in -X. So a positive average speed gives a -X velocity.
+    let wind = Vec3::new(-opts.wind_average, 0.0, 0.0);
 
     let dt = opts.time_step;
     let aero0 = compute_aero(
@@ -721,7 +724,10 @@ fn run(
     let pitch_rad = opts.launch_pitch_deg.to_radians();
     let mut state = State::at_rest(opts.launch_altitude, initial_mass.max(0.001), pitch_rad);
 
-    let wind = Vec3::new(opts.wind_average, 0.0, 0.0);
+    // Java convention (`PinkNoiseWindModel`): an "east wind" (direction = π/2)
+    // means wind blowing FROM east TOWARDS west, i.e. the wind velocity
+    // vector points in -X. So a positive average speed gives a -X velocity.
+    let wind = Vec3::new(-opts.wind_average, 0.0, 0.0);
 
     let dt = opts.time_step;
     let aero0 = compute_aero(

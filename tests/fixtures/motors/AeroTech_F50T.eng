@@ -1,13 +1,16 @@
-; AeroTech F50T
-; Public RASP-format thrust curve, derived from manufacturer spec for the
-; AeroTech 24mm F50-class single-use composite motor.
-F50T 24 95 4-6-8 0.0252 0.0613 AeroTech
-   0.020 75.0
-   0.060 80.0
-   0.120 70.0
-   0.250 55.0
-   0.500 50.0
-   1.000 47.0
-   1.400 45.0
-   1.500 12.0
-   1.530 0.0
+; AeroTech F50T - exported from OpenRocket initial_motors.db
+; columns: time_s thrust_N
+F50T 29.0 98.0 4-6-7-9 0.03360 0.08980 AeroTech
+   0.0000 0.0000
+   0.0130 73.7620
+   0.0326 70.3830
+   0.2670 69.8200
+   0.5180 67.0050
+   0.7920 56.8700
+   0.9060 50.6760
+   1.0000 44.4820
+   1.0360 39.9780
+   1.1070 23.6490
+   1.1990 6.1940
+   1.3160 1.1260
+   1.4300 0.0000

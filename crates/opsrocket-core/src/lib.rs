@@ -15,6 +15,7 @@ pub mod component;
 pub mod geom;
 pub mod material;
 pub mod mathx;
+pub mod profile;
 pub mod units;
 
 pub use component::{

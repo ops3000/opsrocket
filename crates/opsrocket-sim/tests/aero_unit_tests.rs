@@ -10,7 +10,7 @@
 //! from the Java tests' assertions and verified to be the originals.
 
 use opsrocket_core::component::{
-    BodyTube, Common, Component, FinCrossSection, FinSet, NoseCone, NoseShape, Rocket, Stage,
+    AxialMethod, BodyTube, Common, Component, FinCrossSection, FinSet, NoseCone, NoseShape, Rocket, Stage,
 };
 use opsrocket_sim::aero::{compute, FlightConditions};
 
@@ -42,8 +42,10 @@ fn make_estes_alpha_iii() -> Rocket {
         aft_shoulder_capped: false,
         is_flipped: false,
     };
+    let mut fin_common = Common::new("alpha-fins", "3 Fin Set");
+    fin_common.axial_method = AxialMethod::Bottom;
     let fin = FinSet {
-        common: Common::new("alpha-fins", "3 Fin Set"),
+        common: fin_common,
         fin_count: 3,
         root_chord: 0.05,
         tip_chord: 0.03,
