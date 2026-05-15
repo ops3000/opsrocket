@@ -1,5 +1,4 @@
-; AeroTech I357T - exported from OpenRocket initial_motors.db
-; columns: time_s thrust_N
+; AeroTech I357T (motor_id=163 curve_id=186) - OpenRocket initial_motors.db
 I357T 38.0 203.0 6-8-10-12-14 0.17920 0.34944 AeroTech
    0.0000 0.0000
    0.0280 311.6290

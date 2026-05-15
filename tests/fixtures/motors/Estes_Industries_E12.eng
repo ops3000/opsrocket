@@ -1,5 +1,4 @@
-; Estes Industries E12 - exported from OpenRocket initial_motors.db
-; columns: time_s thrust_N
+; Estes Industries E12 (motor_id=713 curve_id=793) - OpenRocket initial_motors.db
 E12 24.0 95.0 0-4-6-8 0.03590 0.05990 Estes_Industries
    0.0000 0.0000
    0.0520 5.0450

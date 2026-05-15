@@ -1,5 +1,4 @@
-; Estes Industries A8 - exported from OpenRocket initial_motors.db
-; columns: time_s thrust_N
+; Estes Industries A8 (motor_id=705 curve_id=781) - OpenRocket initial_motors.db
 A8 18.0 70.0 0-3-5 0.00330 0.01635 Estes_Industries
    0.0000 0.0000
    0.0410 0.5120

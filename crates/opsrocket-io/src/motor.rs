@@ -281,22 +281,48 @@ mod tests {
     use super::*;
     use approx::assert_relative_eq;
 
-    /// The bundled Estes A8 (exported from OpenRocket's `initial_motors.db`)
-    /// must digest to exactly the value stored in the upstream
-    /// `A simple model rocket.ork` (`<digest>22aec...</digest>`).  This
-    /// locks our RASP MotorDigest port bit-for-bit against Java OpenRocket.
+    /// Exactly one bundled Estes A8 curve must digest to the value stored
+    /// in upstream `A simple model rocket.ork`
+    /// (`<digest>22aec01287ea1e3b8c6f66b26fe5fea6</digest>`).  Estes ships
+    /// multiple A8 thrust-curve variants; this proves both that our RASP
+    /// MotorDigest port is bit-for-bit identical to Java OpenRocket *and*
+    /// that the digest uniquely selects the right variant.
     #[test]
     fn a8_digest_matches_openrocket_ork() {
+        const WANT: &str = "22aec01287ea1e3b8c6f66b26fe5fea6";
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
             .parent()
             .unwrap()
             .join("tests/fixtures/motors");
-        let txt = std::fs::read_to_string(dir.join("Estes_Industries_A8.eng"))
-            .expect("bundled A8 fixture");
-        let c = parse_rasp(&txt).expect("parse A8");
-        assert_eq!(c.digest(), "22aec01287ea1e3b8c6f66b26fe5fea6");
+        let mut matches = Vec::new();
+        for e in std::fs::read_dir(&dir).expect("motors dir").flatten() {
+            let p = e.path();
+            if p.extension().and_then(|s| s.to_str()) != Some("eng") {
+                continue;
+            }
+            let fname = p.file_name().unwrap().to_string_lossy().into_owned();
+            if !fname.contains("_A8") {
+                continue;
+            }
+            let txt = std::fs::read_to_string(&p).unwrap();
+            if let Ok(c) = parse_rasp(&txt) {
+                if c.digest() == WANT {
+                    matches.push(fname);
+                }
+            }
+        }
+        assert_eq!(
+            matches.len(),
+            1,
+            "exactly one A8 curve must digest to {WANT}; got {matches:?}"
+        );
+        assert!(
+            matches[0].contains("Estes"),
+            "the matching A8 must be the Estes one, got {}",
+            matches[0]
+        );
     }
 
     // Real Estes A8-3 thrust curve (truncated).

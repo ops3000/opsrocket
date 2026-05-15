@@ -1,5 +1,4 @@
-; Estes Industries C6 - exported from OpenRocket initial_motors.db
-; columns: time_s thrust_N
+; Estes Industries C6 (motor_id=710 curve_id=789) - OpenRocket initial_motors.db
 C6 18.0 70.0 0-3-5-7-P 0.01080 0.02310 Estes_Industries
    0.0000 0.0000
    0.0310 0.9460

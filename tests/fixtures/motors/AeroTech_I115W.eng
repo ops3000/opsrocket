@@ -1,5 +1,4 @@
-; AeroTech I115W - exported from OpenRocket initial_motors.db
-; columns: time_s thrust_N
+; AeroTech I115W (motor_id=137 curve_id=158) - OpenRocket initial_motors.db
 I115W 54.0 156.0 0-4-6-8-10-14-P 0.22900 0.58000 AeroTech
    0.0000 0.0000
    0.0340 12.0950

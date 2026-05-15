@@ -1,5 +1,4 @@
-; AeroTech H148R - exported from OpenRocket initial_motors.db
-; columns: time_s thrust_N
+; AeroTech H148R (motor_id=111 curve_id=130) - OpenRocket initial_motors.db
 H148R 38.0 152.0 0-4-6-8-10 0.14784 0.30912 AeroTech
    0.0000 0.0000
    0.0270 77.2320

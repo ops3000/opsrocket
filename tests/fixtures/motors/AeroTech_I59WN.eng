@@ -1,5 +1,4 @@
-; AeroTech I59WN - exported from OpenRocket initial_motors.db
-; columns: time_s thrust_N
+; AeroTech I59WN (motor_id=171 curve_id=195) - OpenRocket initial_motors.db
 I59WN 38.0 232.0 P 0.27200 0.48700 AeroTech
    0.0000 0.0000
    0.0090 0.3570

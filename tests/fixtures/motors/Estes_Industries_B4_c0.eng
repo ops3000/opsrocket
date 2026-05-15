@@ -1,5 +1,4 @@
-; Estes Industries B4 - exported from OpenRocket initial_motors.db
-; columns: time_s thrust_N
+; Estes Industries B4 (motor_id=706 curve_id=783) - OpenRocket initial_motors.db
 B4 18.0 70.0 2-4-6-P 0.00600 0.01890 Estes_Industries
    0.0000 0.0000
    0.0200 0.4180

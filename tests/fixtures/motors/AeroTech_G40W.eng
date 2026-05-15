@@ -1,5 +1,4 @@
-; AeroTech G40W - exported from OpenRocket initial_motors.db
-; columns: time_s thrust_N
+; AeroTech G40W (motor_id=79 curve_id=90) - OpenRocket initial_motors.db
 G40W 29.0 124.0 4-6-7-8-10 0.05380 0.12300 AeroTech
    0.0000 0.0000
    0.0240 74.3250

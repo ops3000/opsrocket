@@ -1,5 +1,4 @@
-; AeroTech F50T - exported from OpenRocket initial_motors.db
-; columns: time_s thrust_N
+; AeroTech F50T (motor_id=56 curve_id=65) - OpenRocket initial_motors.db
 F50T 29.0 98.0 4-6-7-9 0.03360 0.08980 AeroTech
    0.0000 0.0000
    0.0130 73.7620
