@@ -180,10 +180,9 @@ pub fn compute_with(
                 cd_pressure += fin_pressure_drag(f, fc.mach, area_ref);
             }
             Component::LaunchLug(l) => {
-                let wet = 2.0 * PI * l.outer_radius * l.length * l.instance_count as f64;
-                cd_friction += cf * wet / area_ref;
-                // Java LaunchLugCalc.calculatePressureCD uses TubeCalc:
-                // internal-flow pressure drag through the hollow lug body.
+                // Java LaunchLugCalc.calculateFrictionCD returns 0 verbatim
+                // ("launch lug doesn't add enough area to worry about").
+                // Only the TubeCalc internal-flow pressure drag is counted.
                 let n = l.instance_count as f64;
                 cd_pressure += n * tube_internal_pressure_cd(
                     l.outer_radius, l.inner_radius, l.length, fc, area_ref);
@@ -689,19 +688,25 @@ fn tube_internal_pressure_cd(
 }
 
 fn fin_friction_drag(f: &FinSet, cf: f64, area_ref: f64) -> f64 {
-    // Java FinSetCalc.calculateFrictionCD is
-    //   cd = cf · (1 + 2·thickness/mac) · 2·finArea / refArea   (per fin)
-    // aggregated × fin_count.  We deliberately OMIT the (1 + 2·t/mac)
-    // thickness form-factor here: our nose / body wetted-area integrals
-    // and Java's per-component `componentCf` aggregation are not bit-
-    // identical, and adding only this one Java-exact term unbalances the
-    // total (it pushes friction Cd from +1.4% to +3.3% vs Java and worsens
-    // the apogee match by ~0.1 m).  Keeping the flat-plate form gives the
-    // closest *net* friction to Java's reported value for the fixtures.
-    // See docs/PRECISION_GAP.md.
+    // Java FinSetCalc.calculateFrictionCD (verbatim):
+    //   cd = cf · (1 + 2·thickness/macLength) · 2·finArea / refArea
+    // aggregated × fin_count.  macLength is the mean aerodynamic chord:
+    // Java integrates Σchord²/Σchord over the span; for a trapezoidal
+    // planform this evaluates exactly to
+    //   MAC = (2/3)·(cr² + cr·ct + ct²)/(cr + ct).
     let af = 0.5 * (f.root_chord + f.tip_chord) * f.height; // single-fin area
-    let wetted = 2.0 * af * f.fin_count as f64;
-    cf * wetted / area_ref
+    let cr = f.root_chord;
+    let ct = f.tip_chord;
+    let mac = if cr + ct > 1e-9 {
+        (2.0 / 3.0) * (cr * cr + cr * ct + ct * ct) / (cr + ct)
+    } else {
+        0.0
+    };
+    if af < 1e-12 || mac < 1e-12 {
+        return 0.0;
+    }
+    let form = 1.0 + 2.0 * f.thickness / mac;
+    cf * form * 2.0 * af * f.fin_count as f64 / area_ref
 }
 
 fn fin_pressure_drag(f: &FinSet, mach: f64, area_ref: f64) -> f64 {

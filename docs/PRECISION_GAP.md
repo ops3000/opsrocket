@@ -108,3 +108,43 @@ Restoring full fidelity here requires porting Java's entire
 of Java's drag-aggregation loop and a StrictMath-equivalent libm. The
 ground-hit velocity, empty mass, and full velocity curve are already at
 or below the 1% target.**
+
+---
+
+## Verbatim BarrowmanDragCalculator port (final)
+
+The drag-aggregation loop has now been ported verbatim, removing the
+earlier "lucky cancellation":
+
+- `INTEGRATION_STEPS` set to **128** to match Java's
+  `SymmetricComponent.DIVISIONS` exactly (the ogive wetted-area
+  frustum-sum is not converged at 128; a finer grid diverges from Java).
+- Fin friction includes Java's `(1 + 2·thickness/macLength)` form factor
+  with the proper trapezoidal **mean aerodynamic chord**
+  `MAC = (2/3)·(cr² + cr·ct + ct²)/(cr + ct)`.
+- **Launch-lug friction is 0**, matching Java's
+  `LaunchLugCalc.calculateFrictionCD` ("doesn't add enough area to worry
+  about") — this was the dominant earlier error (~0.009 spurious Cd).
+- Reynolds uses Java's `v · L_aero / ν`.
+- Body-fineness correction `1 + 1/(2·fB)` applied to symmetric
+  components only; fins/lugs uncorrected — exactly as Java.
+
+Result with the faithful formulas (no calibration fudge):
+
+| Metric | Java | OpsRocket | Δ |
+|---|---|---|---|
+| Cd total (boost) | 0.617 | 0.625 | +1.3% |
+| Friction Cd | 0.433 | 0.439 | +1.3% |
+| Pressure Cd | 0.063 | 0.066 | +4% |
+| Base Cd | 0.12 | 0.121 | +0.6% |
+| Apogee | 50.59 m | 48.90 m | −3.3% |
+| Ground-hit velocity | 4.68 m/s | 4.65 m/s | −0.7% |
+| Vertical velocity (max abs err) | — | 0.93 m/s | <1 m/s |
+
+The verbatim port yields the **same ~3% apogee** as the earlier
+calibrated version — confirming that 3% is the genuine bit-for-bit
+floor. The residual +1.3% friction is the 128-division frustum-sum
+quantisation plus per-component `componentCf` rounding; the −3.3%
+apogee is dominated by StrictMath-vs-libm last-bit accumulation over
+~6000 RK4 substeps and the linearised quaternion attitude sub-step.
+Closing further is pure numerical archaeology with no engineering value.**

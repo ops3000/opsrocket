@@ -14,9 +14,15 @@
 
 use crate::component::{NoseShape, Transition};
 
-/// Number of integration steps used per body component.
-/// Java uses ~200; we use 256 for slightly tighter Simpson accuracy.
-const INTEGRATION_STEPS: usize = 256;
+/// Number of integration steps per body component.
+///
+/// Java's `SymmetricComponent.calculateProperties` uses exactly
+/// `DIVISIONS = 128`.  Matching that value bit-for-bit matters: the ogive
+/// tip region has high curvature and the frustum-sum wetted area is *not*
+/// fully converged at 128 divisions, so a finer grid (e.g. 256) yields a
+/// ~10% larger ogive wetted area and a friction-Cd mismatch vs Java.  We
+/// deliberately use Java's coarse value for output parity.
+const INTEGRATION_STEPS: usize = 128;
 
 /// Radius (m) at position `x` along a transition profile of length `length`,
 /// going from `r_fore` (x=0) to `r_aft` (x=length).
