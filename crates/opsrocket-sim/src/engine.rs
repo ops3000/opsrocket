@@ -29,6 +29,13 @@ use crate::aero::{compute as compute_aero, FlightConditions};
 use crate::flight::{rk4_step, ForceSampler, State};
 use crate::mass::{empty_mass_properties, MassProperties};
 
+// Java RK4SimulationStepper / AbstractSimulationStepper constants.
+const MIN_TIME_STEP: f64 = 0.001;
+/// Maximum pitch/yaw step angle (Java RECOMMENDED_ANGLE_STEP = 3°).
+const MAX_ANGLE_STEP: f64 = 3.0 * std::f64::consts::PI / 180.0;
+/// Maximum pitch/yaw angular-velocity change per step (Java = 4°).
+const MAX_PITCH_YAW_CHANGE: f64 = 4.0 * std::f64::consts::PI / 180.0;
+
 #[derive(Debug, Clone)]
 pub struct SimulationOptions {
     pub time_step: f64,
@@ -425,7 +432,10 @@ fn run_multistage(
     // vector points in -X. So a positive average speed gives a -X velocity.
     let wind = Vec3::new(-opts.wind_average, 0.0, 0.0);
 
-    let dt = opts.time_step;
+    // Adaptive RK4 timestep (Java RK4SimulationStepper). `dt` now varies per
+    // step; `user_dt` is the configured base step.
+    let user_dt = opts.time_step;
+    let mut dt = (user_dt / 5.0).max(MIN_TIME_STEP); // launch-rod start
     let aero0 = compute_aero(
         &aero_rocket,
         FlightConditions { mach: 0.05, angle_of_attack: 0.0, reynolds: 1.0e6 },
@@ -439,7 +449,7 @@ fn run_multistage(
     let mut apogee_time = -1.0;
     let mut prev_vz = 0.0;
     let mut prev_speed = 0.0;
-    let mut steps_since_print = 0;
+    let mut _steps_since_print = 0;
     let mut on_rail = stage_curves.iter().any(|c| c.is_some());
     let mut lifted = false;
 
@@ -622,6 +632,63 @@ fn run_multistage(
                 crate::aero::pitch_damping_coefficient(&aero_rocket, total_cg)
             },
         };
+
+        // ---- Adaptive timestep (Java RK4SimulationStepper) ----
+        // dt = min of: base step, angle-step limit, pitch/yaw accel limit,
+        // 1.5×previous, event-proximity clamp; floored at user_dt/20.
+        {
+            let base = if on_rail {
+                (user_dt / 5.0).max(MIN_TIME_STEP)
+            } else {
+                user_dt.max(MIN_TIME_STEP)
+            };
+            // dt[2]: max angle step / lateral pitch rate.
+            let lateral_pitch_rate =
+                (state.angular.y * state.angular.y + state.angular.z * state.angular.z).sqrt();
+            let dt_angle = if lateral_pitch_rate > 1e-6 {
+                MAX_ANGLE_STEP / lateral_pitch_rate
+            } else {
+                f64::MAX
+            };
+            // dt[5]: max pitch/yaw angular-velocity change.  Estimate the
+            // rotational acceleration from one probe deriv.
+            let probe = sampler.deriv(&state);
+            let rot_acc_xy = probe.d_angular.y.abs().max(probe.d_angular.z.abs());
+            let dt_rot = if rot_acc_xy > 1e-6 {
+                MAX_PITCH_YAW_CHANGE / rot_acc_xy
+            } else {
+                f64::MAX
+            };
+            // dt[7]: at most 1.5× the previous step.
+            let dt_growth = 1.5 * dt;
+            // Event-proximity clamp: land exactly on the next scheduled
+            // discrete event (burnout / ignition).  Apogee is detected
+            // post-step via bisection below.
+            let mut max_to_event = f64::MAX;
+            for i in 0..n {
+                if attached[i] {
+                    if let (Some((curve, _)), Some(t0)) =
+                        (stage_curves[i].as_ref(), ignition_time[i])
+                    {
+                        let bt = t0 + curve.burn_time();
+                        if bt > state.t {
+                            max_to_event = max_to_event.min(bt - state.t);
+                        }
+                    }
+                }
+            }
+            let min_dt = (user_dt / 20.0).max(MIN_TIME_STEP);
+            let mut chosen = base
+                .min(dt_angle)
+                .min(dt_rot)
+                .min(dt_growth)
+                .min(max_to_event);
+            if (max_to_event - chosen).abs() < min_dt && max_to_event < f64::MAX {
+                chosen = max_to_event;
+            }
+            dt = chosen.max(min_dt);
+        }
+
         let next = rk4_step(&state, dt, &sampler);
         let mut next = State { mass: next.mass.max(1.0e-6), ..next };
 
@@ -688,14 +755,21 @@ fn run_multistage(
             }
         }
 
-        // Apogee detection
+        // Apogee detection with linear event-time interpolation. Vertical
+        // velocity crosses zero from + to − within this step; the exact
+        // apogee time is found by linear interpolation between the
+        // step-start vz (prev_vz) and step-end vz (next.vel.z), matching
+        // Java's within-step event bisection (to first order).
         if apogee_time < 0.0 && prev_vz > 0.0 && next.vel.z <= 0.0 {
-            apogee_time = state.t;
-            result.events.push((state.t, "APOGEE".to_string()));
+            let denom = prev_vz - next.vel.z;
+            let frac = if denom.abs() > 1e-12 { (prev_vz / denom).clamp(0.0, 1.0) } else { 0.0 };
+            let t_apogee = state.t + dt * frac;
+            apogee_time = t_apogee;
+            result.events.push((t_apogee, "APOGEE".to_string()));
             if !deployed && parachute_count(rocket) > 0 {
                 deployed = true;
-                deploy_time = state.t;
-                result.events.push((state.t, "RECOVERY_DEVICE_DEPLOYMENT".to_string()));
+                deploy_time = t_apogee;
+                result.events.push((t_apogee, "RECOVERY_DEVICE_DEPLOYMENT".to_string()));
             }
         }
         prev_vz = next.vel.z;
@@ -734,8 +808,11 @@ fn run_multistage(
         }
 
         state = next;
-        steps_since_print += 1;
-        if steps_since_print >= 4 {
+        // Record a data row roughly every `user_dt` of sim time, so the
+        // output density is independent of the adaptive integration step.
+        _steps_since_print += 1;
+        let record_interval = user_dt.max(0.02);
+        if state.t - (result.rows.last().map(|r| r[0]).unwrap_or(0.0)) >= record_interval {
             let stage_mass = mass_properties_for_stages_active(rocket, &attached);
             let thrust = thrust_now(state.t, &stage_curves, &attached, &ignition_time);
             let (cd_now, _, _, _, _, _) = aero_at(&state, &aero_rocket, &atmosphere, wind, thrust);
@@ -754,7 +831,7 @@ fn run_multistage(
                 deployed,
                 chute_drag_factor,
             );
-            steps_since_print = 0;
+            _steps_since_print = 0;
         }
 
         // Termination: ground hit pre-apogee or stationary

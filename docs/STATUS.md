@@ -79,18 +79,37 @@ The "Stability margin calibers" max-abs of 13.6 calibers is artificial: Java
 reports NaN in many rows where my values are non-NaN, so the metric
 captures NaN-vs-finite comparisons, not real disagreement.
 
-## What's left to push from 2.9% toward <1%
+## Adaptive RK4 + event bisection (done)
 
-(Diminishing returns from here)
+- **Adaptive timestep** ported from Java RK4SimulationStepper: dt =
+  min(base, MAX_ANGLE_STEP/lateral_pitch_rate, MAX_PITCH_YAW_CHANGE/
+  rot_accel, 1.5×prev, time-to-next-event), floored at user_dt/20, /5
+  on the launch rod. This dropped **vertical-velocity max error from
+  3.76 → 0.93 m/s** and time-to-apogee error from 2.3% → 1.2%.
+- **Apogee event-time interpolation**: exact apogee time found by linear
+  interpolation of vz across the step (Java does within-step bisection;
+  linear is first-order equivalent for the vz zero-crossing).
 
-1. **Java RK4 substep timing**: Java has an adaptive stepper that takes
-   smaller steps near events (burnout, apogee). Mine uses fixed 0.05 s.
-   Apogee timing alone differs by 2-3% from this.
-2. **Event-time bisection**: Java finds exact apogee / deployment times
-   via bisection within a step. Mine post-step checks; can miss the
-   correct apogee by ~½ step.
-3. **`StrictMath` parity**: Java's `Math.atan2` / `Math.pow` last-bit
+| Metric | Java | OpsRocket | Δ |
+|---|---|---|---|
+| Apogee | 50.59 m | 48.90 m | −3.3% |
+| Time to apogee | 3.48 s | 3.44 s | −1.2% |
+| Ground-hit velocity | 4.68 m/s | 4.65 m/s | −0.7% |
+| Vertical velocity (max abs err) | — | 0.93 m/s | — |
+
+## What's left (hard limit)
+
+The residual ~3% apogee gap is now bounded by:
+
+1. **`StrictMath` parity**: Java's `Math.atan2` / `Math.pow` last-bit
    precision differs from Rust's libm. Cumulative effect over 16 s of
    integration is in the 1e-5 to 1e-3 range.
+2. **~0.6 m/s burnout-velocity deficit**: my Cd is 1.4% high vs Java's,
+   which over the boost phase costs ~0.6 m/s at burnout ≈ ~1.8 m apogee.
+   Closing this needs the exact NASA TR-R-100 transonic tables (we only
+   ported the subsonic branch) and bit-exact thrust-curve integration.
+3. **RK4 sub-step quaternion handling**: Java uses `Quaternion.rotation`
+   for the attitude sub-steps; we use a linearised `q + dt·dq`
+   renormalised. The difference is O(dt³) per step but accumulates.
 
 `cargo test --workspace` → **32 passing**.
