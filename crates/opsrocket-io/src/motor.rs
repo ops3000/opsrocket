@@ -37,7 +37,119 @@ pub struct ThrustPoint {
     pub thrust: f64,
 }
 
+/// Quantise a value exactly as Java `MotorDigest.update`:
+///   v = v + signum(v)·EPSILON;  v *= multiplier;  v = v + signum(v)·EPSILON;
+///   intval = Math.round(v)            (round half up toward +∞)
+fn digest_quantize(v: f64, multiplier: i64) -> i32 {
+    const EPS: f64 = 0.00000000001; // 1e-11, MotorDigest.EPSILON
+    let next = |x: f64| x + x.signum() * EPS;
+    let mut x = next(v);
+    x *= multiplier as f64;
+    x = next(x);
+    // Java Math.round(double) = floor(x + 0.5)
+    (x + 0.5).floor() as i32
+}
+
+/// Compute the OpenRocket motor digest for a RASP-loaded motor — a direct
+/// port of `RASPMotorLoader.createRASPMotor` + `MotorDigest`.
+///
+/// The digest is MD5 over a byte stream of big-endian 32-bit ints:
+///   for each DataType block (in ascending `order`):
+///     [order:i32][len:i32][quantised values...:i32]
+/// RASP motors digest exactly three blocks:
+///   TIME_ARRAY   (order 0, ×1000)   — finalised time points (s→ms)
+///   MASS_SPECIFIC(order 1, ×10000)  — [totalW, totalW−propW] (kg→0.1g)
+///   FORCE_PER_TIME(order 5, ×1000)  — finalised thrust points (N→mN)
+/// `total_w`/`prop_w` are in kg.
+pub fn rasp_digest(
+    raw_time: &[f64],
+    raw_thrust: &[f64],
+    total_w: f64,
+    prop_w: f64,
+) -> String {
+    use md5::{Digest, Md5};
+
+    // ---- sortLists: stable bubble sort by time (data is normally sorted) ----
+    let mut t: Vec<f64> = raw_time.to_vec();
+    let mut f: Vec<f64> = raw_thrust.to_vec();
+    loop {
+        let mut swapped = false;
+        let mut i = 0;
+        while i + 1 < t.len() {
+            if t[i + 1] < t[i] {
+                t.swap(i, i + 1);
+                f.swap(i, i + 1);
+                swapped = true;
+                break;
+            }
+            i += 1;
+        }
+        if !swapped {
+            break;
+        }
+    }
+
+    // ---- finalizeThrustCurve ----
+    let eq = |a: f64, b: f64| (a - b).abs() < 1.0e-8; // MathUtil.EPSILON
+    if !t.is_empty() {
+        if !eq(t[0], 0.0) {
+            t.insert(0, 0.0);
+            f.insert(0, 0.0);
+        }
+        if t.len() >= 2 && eq(t[0], 0.0) && eq(t[1], 0.0) {
+            t.remove(0);
+            f.remove(0);
+        }
+        // remove consecutive duplicate (time,thrust) points
+        let mut i = 0;
+        while i + 1 < t.len() {
+            while i + 1 < t.len() && eq(t[i], t[i + 1]) && eq(f[i], f[i + 1]) {
+                t.remove(i);
+                f.remove(i);
+            }
+            i += 1;
+        }
+        // two final data points at the same time: drop the zero-thrust one
+        let n = t.len() - 1;
+        if n >= 1 && eq(t[n - 1], t[n]) {
+            if eq(f[n - 1], 0.0) {
+                t.remove(n - 1);
+                f.remove(n - 1);
+            } else if eq(f[n], 0.0) {
+                t.remove(n);
+                f.remove(n);
+            }
+        }
+    }
+
+    let mut h = Md5::new();
+    let put_block = |hasher: &mut Md5, order: i32, mult: i64, vals: &[f64]| {
+        hasher.update(order.to_be_bytes());
+        hasher.update((vals.len() as i32).to_be_bytes());
+        for &v in vals {
+            hasher.update(digest_quantize(v, mult).to_be_bytes());
+        }
+    };
+    put_block(&mut h, 0, 1000, &t); // TIME_ARRAY
+    put_block(&mut h, 1, 10000, &[total_w, total_w - prop_w]); // MASS_SPECIFIC
+    put_block(&mut h, 5, 1000, &f); // FORCE_PER_TIME
+    let out = h.finalize();
+    let mut s = String::with_capacity(32);
+    for b in out {
+        s.push_str(&format!("{:02x}", b));
+    }
+    s
+}
+
 impl ThrustCurve {
+    /// OpenRocket-compatible motor digest (matches the `<digest>` stored in
+    /// `.ork` files for RASP-sourced motors).
+    pub fn digest(&self) -> String {
+        let times: Vec<f64> = self.points.iter().map(|p| p.time).collect();
+        let thrusts: Vec<f64> = self.points.iter().map(|p| p.thrust).collect();
+        rasp_digest(&times, &thrusts, self.total_mass, self.propellant_mass)
+    }
+
     pub fn burn_time(&self) -> f64 {
         self.points.last().map(|p| p.time).unwrap_or(0.0)
     }
@@ -168,6 +280,24 @@ pub fn parse_rasp(text: &str) -> Result<ThrustCurve, Error> {
 mod tests {
     use super::*;
     use approx::assert_relative_eq;
+
+    /// The bundled Estes A8 (exported from OpenRocket's `initial_motors.db`)
+    /// must digest to exactly the value stored in the upstream
+    /// `A simple model rocket.ork` (`<digest>22aec...</digest>`).  This
+    /// locks our RASP MotorDigest port bit-for-bit against Java OpenRocket.
+    #[test]
+    fn a8_digest_matches_openrocket_ork() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("tests/fixtures/motors");
+        let txt = std::fs::read_to_string(dir.join("Estes_Industries_A8.eng"))
+            .expect("bundled A8 fixture");
+        let c = parse_rasp(&txt).expect("parse A8");
+        assert_eq!(c.digest(), "22aec01287ea1e3b8c6f66b26fe5fea6");
+    }
 
     // Real Estes A8-3 thrust curve (truncated).
     const A8_ENG: &str = "\

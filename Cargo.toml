@@ -32,6 +32,7 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 csv = "1"
 approx = "0.5"
+md-5 = "0.10"
 
 [profile.release]
 opt-level = 3

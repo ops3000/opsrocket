@@ -279,28 +279,63 @@ fn default_motor_dirs() -> Vec<std::path::PathBuf> {
 }
 
 fn find_motor_file(dir: &Path, designation: &str) -> Option<std::path::PathBuf> {
+    find_motor_file_digest(dir, designation, None)
+}
+
+/// Locate a motor `.eng` file in `dir`.
+///
+/// If `want_digest` is supplied, every `.eng` whose designation matches is
+/// parsed and its OpenRocket motor digest computed; the file whose digest
+/// equals `want_digest` exactly is returned (precise disambiguation when
+/// several manufacturers ship e.g. a "C6").  If no digest matches — or none
+/// was supplied — the first designation-name match is returned, preserving
+/// the previous behaviour.
+fn find_motor_file_digest(
+    dir: &Path,
+    designation: &str,
+    want_digest: Option<&str>,
+) -> Option<std::path::PathBuf> {
     let entries = std::fs::read_dir(dir).ok()?;
+    let mut name_match: Option<std::path::PathBuf> = None;
+    let mut digest_candidates: Vec<std::path::PathBuf> = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().and_then(|s| s.to_str()) != Some("eng") {
             continue;
         }
-        if let Ok(txt) = std::fs::read_to_string(&path) {
-            for line in txt.lines() {
-                let l = line.trim();
-                if l.is_empty() || l.starts_with(';') {
-                    continue;
-                }
-                if let Some(name) = l.split_whitespace().next() {
-                    if name.eq_ignore_ascii_case(designation) {
-                        return Some(path);
-                    }
-                }
-                break;
-            }
+        let Ok(txt) = std::fs::read_to_string(&path) else { continue };
+        // First non-comment line → designation token.
+        let header = txt
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty() && !l.starts_with(';'));
+        let Some(header) = header else { continue };
+        let Some(name) = header.split_whitespace().next() else { continue };
+        if !name.eq_ignore_ascii_case(designation) {
+            continue;
+        }
+        if name_match.is_none() {
+            name_match = Some(path.clone());
+        }
+        if want_digest.is_some() {
+            digest_candidates.push(path);
         }
     }
-    None
+    if let Some(want) = want_digest {
+        for path in &digest_candidates {
+            if let Ok(txt) = std::fs::read_to_string(path) {
+                if let Ok(curve) = parse_rasp(&txt) {
+                    if curve.digest().eq_ignore_ascii_case(want) {
+                        return Some(path.clone());
+                    }
+                }
+            }
+        }
+        // No exact digest match — fall back to designation-name match but
+        // only after exhausting digest comparison (Java behaviour: use the
+        // closest available motor with a warning).
+    }
+    name_match
 }
 
 /// Run a simulation by name from the parsed .ork document.
@@ -360,9 +395,10 @@ pub fn simulate_with(
                 } else {
                     default_motor_dirs()
                 };
+                let want_digest = assignment.digest.as_deref();
                 let mut found = None;
                 for dir in &dirs {
-                    if let Some(path) = find_motor_file(dir, designation) {
+                    if let Some(path) = find_motor_file_digest(dir, designation, want_digest) {
                         let txt = std::fs::read_to_string(&path)?;
                         let curve = parse_rasp(&txt)?;
                         found = Some((curve, *ignition));
