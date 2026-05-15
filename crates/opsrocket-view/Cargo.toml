@@ -1,0 +1,12 @@
+[package]
+name = "opsrocket-view"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Presentation DTOs + builders shared by the OpsRocket Tauri and Web front-ends"
+
+[dependencies]
+opsrocket-core = { workspace = true }
+opsrocket-io   = { workspace = true }
+opsrocket-sim  = { workspace = true }
+serde = { workspace = true }

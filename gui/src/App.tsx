@@ -1,6 +1,13 @@
-import { useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
-import { loadOrk, runSim, RocketView, FlightData } from "./lib/api";
+import { useEffect, useState } from "react";
+import {
+  loadOrk,
+  runSim,
+  listFixtures,
+  isTauri,
+  RocketView,
+  FlightData,
+  Fixture,
+} from "./lib/api";
 import { RocketView2D } from "./components/RocketView2D";
 import { RocketView3D } from "./components/RocketView3D";
 import { FlightChart } from "./components/FlightChart";
@@ -13,18 +20,27 @@ export default function App() {
   const [view3d, setView3d] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [fixtures, setFixtures] = useState<Fixture[]>([]);
+  const [picked, setPicked] = useState<string>("");
 
-  async function openFile() {
-    const sel = await open({
-      filters: [{ name: "OpenRocket", extensions: ["ork"] }],
-    });
-    if (typeof sel !== "string") return;
+  useEffect(() => {
+    if (!isTauri()) {
+      listFixtures()
+        .then((f) => {
+          setFixtures(f);
+          if (f.length) setPicked(f[0].path);
+        })
+        .catch(() => {});
+    }
+  }, []);
+
+  async function loadPath(p: string) {
     setBusy(true);
     setErr(null);
     setFd(null);
     try {
-      const r = await loadOrk(sel);
-      setPath(sel);
+      const r = await loadOrk(p);
+      setPath(p);
       setRv(r);
       setSim(r.simulations[0] ?? "");
     } catch (e) {
@@ -32,6 +48,14 @@ export default function App() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function openNative() {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const sel = await open({
+      filters: [{ name: "OpenRocket", extensions: ["ork"] }],
+    });
+    if (typeof sel === "string") loadPath(sel);
   }
 
   async function simulate() {
@@ -53,14 +77,34 @@ export default function App() {
     <div className="app">
       <header>
         <h1>OpsRocket</h1>
-        <button onClick={openFile} disabled={busy}>
-          Open .ork
-        </button>
+        {isTauri() ? (
+          <button onClick={openNative} disabled={busy}>
+            Open .ork
+          </button>
+        ) : (
+          <>
+            <select
+              value={picked}
+              onChange={(e) => setPicked(e.target.value)}
+              disabled={busy || !fixtures.length}
+            >
+              {fixtures.map((f) => (
+                <option key={f.path} value={f.path}>
+                  {f.name}
+                </option>
+              ))}
+            </select>
+            <button onClick={() => picked && loadPath(picked)} disabled={busy}>
+              Load
+            </button>
+          </>
+        )}
         {rv && (
           <>
             <span className="meta">
               {rv.name}
-              {rv.designer ? ` — ${rv.designer}` : ""} · {(rv.total_length * 100).toFixed(1)} cm
+              {rv.designer ? ` — ${rv.designer}` : ""} ·{" "}
+              {(rv.total_length * 100).toFixed(1)} cm
             </span>
             <select value={sim} onChange={(e) => setSim(e.target.value)}>
               {rv.simulations.map((s) => (
@@ -69,7 +113,10 @@ export default function App() {
                 </option>
               ))}
             </select>
-            <button onClick={simulate} disabled={busy || !rv.simulations.length}>
+            <button
+              onClick={simulate}
+              disabled={busy || !rv.simulations.length}
+            >
               Simulate
             </button>
             <button onClick={() => setView3d((v) => !v)}>
@@ -77,7 +124,9 @@ export default function App() {
             </button>
           </>
         )}
-        {err && <span style={{ color: "#be2768", fontSize: 13 }}>{err}</span>}
+        {err && (
+          <span style={{ color: "#be2768", fontSize: 13 }}>{err}</span>
+        )}
       </header>
 
       <div className="main">
@@ -105,7 +154,11 @@ export default function App() {
                 <RocketView2D rv={rv} />
               )
             ) : (
-              <div className="empty">Open an .ork file to begin</div>
+              <div className="empty">
+                {isTauri()
+                  ? "Open an .ork file to begin"
+                  : "Pick a rocket and click Load"}
+              </div>
             )}
           </div>
           <div className="panel" style={{ borderBottom: "none" }}>
@@ -137,7 +190,8 @@ export default function App() {
           </>
         ) : (
           <span style={{ color: "#9a7b56" }}>
-            OpsRocket — Rust simulation core · Tauri + React + Three.js
+            OpsRocket — Rust core · {isTauri() ? "Tauri desktop" : "web"} ·
+            React + Three.js
           </span>
         )}
       </footer>
@@ -145,8 +199,6 @@ export default function App() {
   );
 }
 
-// The bundled motor fixtures live at <repo>/tests/fixtures/motors.
-// Derive that from a fixture .ork path if it sits under tests/fixtures.
 function guessMotorsDir(orkPath: string): string | null {
   const marker = "/tests/fixtures/";
   const i = orkPath.indexOf(marker);

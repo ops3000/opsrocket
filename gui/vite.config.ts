@@ -8,6 +8,14 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+    proxy: {
+      // Browser mode talks to the opsrocket-web server; Tauri mode uses
+      // invoke() and never hits this.
+      "/api": {
+        target: "http://127.0.0.1:8787",
+        changeOrigin: true,
+      },
+    },
   },
   build: {
     target: "esnext",
