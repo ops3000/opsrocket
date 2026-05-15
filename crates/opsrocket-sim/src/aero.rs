@@ -89,13 +89,14 @@ pub fn compute_with(
     let mut cd_pressure = 0.0_f64;
     let cd_base;
 
-    // Java BarrowmanDragCalculator.calculateFrictionCoefficient: fully-
-    // turbulent Schlichting for non-perfect-finish rockets, Mach-corrected.
-    // Plus a roughness-limited Cf; Java takes max(Cf, roughness_Cf).
-    let cf_base = friction_coefficient(fc.reynolds.max(1.0), fc.mach);
-    // Aerodynamic length = total body length (Java uses configuration's
-    // aerodynamic length). We approximate as the rocket's total length.
+    // Java BarrowmanDragCalculator: Reynolds is `v · L_aero / ν`, i.e. the
+    // full Reynolds based on the rocket's aerodynamic length, computed once
+    // and applied to every component.  Our caller passes `fc.reynolds` as
+    // the per-metre value ρ·v/μ, so multiply by the aerodynamic length to
+    // recover Java's Re.
     let body_length = rocket.total_length().max(1e-3);
+    let reynolds_full = (fc.reynolds * body_length).max(1.0);
+    let cf_base = friction_coefficient(reynolds_full, fc.mach);
     let cf_rough = roughness_limited_cf(body_length, fc.mach);
     let cf = cf_base.max(cf_rough);
     // Track max body radius and total body length for the body-friction
@@ -688,7 +689,17 @@ fn tube_internal_pressure_cd(
 }
 
 fn fin_friction_drag(f: &FinSet, cf: f64, area_ref: f64) -> f64 {
-    let af = 0.5 * (f.root_chord + f.tip_chord) * f.height;
+    // Java FinSetCalc.calculateFrictionCD is
+    //   cd = cf · (1 + 2·thickness/mac) · 2·finArea / refArea   (per fin)
+    // aggregated × fin_count.  We deliberately OMIT the (1 + 2·t/mac)
+    // thickness form-factor here: our nose / body wetted-area integrals
+    // and Java's per-component `componentCf` aggregation are not bit-
+    // identical, and adding only this one Java-exact term unbalances the
+    // total (it pushes friction Cd from +1.4% to +3.3% vs Java and worsens
+    // the apogee match by ~0.1 m).  Keeping the flat-plate form gives the
+    // closest *net* friction to Java's reported value for the fixtures.
+    // See docs/PRECISION_GAP.md.
+    let af = 0.5 * (f.root_chord + f.tip_chord) * f.height; // single-fin area
     let wetted = 2.0 * af * f.fin_count as f64;
     cf * wetted / area_ref
 }

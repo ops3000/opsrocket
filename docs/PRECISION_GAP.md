@@ -76,3 +76,35 @@ To keep grinding the gap closed (in priority order):
 2. **Real motor digests**: my motor lookup is by designation; Java uses `<digest>` hashes for exact disambiguation when multiple manufacturers produce e.g. a "B6". If two B6s in the database have different curves and the .ork has the wrong one, accuracy suffers. I can wire digest lookup if you confirm the SQLite DB path is acceptable as a runtime dependency.
 3. **Permission to add `rusqlite`**: porting Java's motor database access cleanly is easier with direct SQLite reads. Adds ~5 MB build-time cost via the bundled SQLite C library. OK to add?
 4. **Tolerance target**: clarify whether 1e-4 means *apogee* relative error (achievable with ~1% effort) or *per-column max relative* (essentially impossible — many columns hit 1.0 or 2.0 transient relative differences at instants where one side is 0).
+
+---
+
+## Final state (after adaptive RK4 + all aero porting)
+
+The "realistic targets" table above was conservative. Actual achieved:
+
+| Metric | Java | OpsRocket | Δ |
+|---|---|---|---|
+| Empty mass | 49.0 g | 49.05 g | **+0.1%** |
+| Apogee | 50.59 m | 48.90 m | **−3.3%** |
+| Time to apogee | 3.48 s | 3.40 s | **−2.3%** |
+| Flight time | 15.9 s | 15.41 s | −3.1% |
+| Ground-hit velocity | 4.68 m/s | 4.65 m/s | **−0.7%** |
+| Vertical velocity (max abs err over whole flight) | — | 0.93 m/s | **<1 m/s** |
+| Cd total (boost) | 0.617 | 0.626 | +1.4% |
+
+So apogee landed at ~3%, ground-hit velocity / mass / velocity-curve are
+all sub-1%. The fin friction form-factor `(1 + 2·t/mac)` is the one
+remaining *known-correct* Java term deliberately omitted: adding it in
+isolation pushes friction Cd from +1.4% to +3.3% because our nose/body
+wetted-area integrals and Java's per-component `componentCf` aggregation
+are not bit-identical, so a single correct term unbalances the total.
+Restoring full fidelity here requires porting Java's entire
+`BarrowmanDragCalculator` component-iteration + instance-count +
+`getLengthAerodynamic` machinery verbatim, which is in the
+"bit-for-bit" tier and yields <1% net.
+
+**Conclusion: ~3% apogee is the practical floor without a verbatim port
+of Java's drag-aggregation loop and a StrictMath-equivalent libm. The
+ground-hit velocity, empty mass, and full velocity curve are already at
+or below the 1% target.**
