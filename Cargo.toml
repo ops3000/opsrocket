@@ -7,6 +7,9 @@ members = [
     "crates/opsrocket-cli",
     "crates/opsrocket-tests",
 ]
+# The Tauri GUI crate is excluded so `cargo test --workspace` stays fast
+# and unaffected by the heavy Tauri dependency tree. Build it from gui/.
+exclude = ["gui/src-tauri"]
 
 [workspace.package]
 version = "0.1.0"

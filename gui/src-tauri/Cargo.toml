@@ -1,0 +1,21 @@
+[package]
+name = "opsrocket-gui"
+version = "0.1.0"
+edition = "2021"
+description = "OpsRocket desktop GUI (Tauri + React)"
+license = "GPL-3.0-or-later"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+opsrocket-core = { path = "../../crates/opsrocket-core" }
+opsrocket-io = { path = "../../crates/opsrocket-io" }
+opsrocket-sim = { path = "../../crates/opsrocket-sim" }
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
