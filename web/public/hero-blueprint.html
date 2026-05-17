@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpsRocket — Hero V2 · Blueprint</title>
+    <style>
+      :root {
+        --bg: #071423;
+        --line: rgba(120, 200, 255, 0.16);
+        --line2: rgba(120, 200, 255, 0.34);
+        --ink: #dfeefc;
+        --muted: #7fa6c8;
+        --cyan: #4fd7ff;
+        --mag: #ff5fa2;
+      }
+      * { box-sizing: border-box; margin: 0; }
+      html, body { height: 100%; }
+      body {
+        background: var(--bg);
+        color: var(--ink);
+        font: 15px/1.5 ui-sans-serif, system-ui, sans-serif;
+        overflow: hidden;
+      }
+      .grid {
+        position: fixed;
+        inset: 0;
+        background-image:
+          linear-gradient(var(--line) 1px, transparent 1px),
+          linear-gradient(90deg, var(--line) 1px, transparent 1px),
+          linear-gradient(var(--line2) 1px, transparent 1px),
+          linear-gradient(90deg, var(--line2) 1px, transparent 1px);
+        background-size: 28px 28px, 28px 28px, 140px 140px, 140px 140px;
+        mask-image: radial-gradient(ellipse 90% 80% at 60% 50%, #000 55%, transparent);
+      }
+      .wrap {
+        position: relative;
+        height: 100%;
+        display: grid;
+        grid-template-columns: 1.05fr 0.95fr;
+        align-items: center;
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 0 48px;
+      }
+      .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+      .tag {
+        display: inline-block;
+        font-size: 11px;
+        letter-spacing: 0.28em;
+        color: var(--cyan);
+        border: 1px solid var(--line2);
+        border-radius: 999px;
+        padding: 6px 14px;
+        margin-bottom: 26px;
+      }
+      h1 {
+        font-size: clamp(38px, 5.4vw, 70px);
+        font-weight: 800;
+        line-height: 1.04;
+        letter-spacing: -0.02em;
+      }
+      h1 .hl {
+        background: linear-gradient(90deg, var(--cyan), var(--mag));
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+      }
+      p.lede {
+        margin-top: 22px;
+        max-width: 30em;
+        color: var(--muted);
+        font-size: 17px;
+      }
+      .specs {
+        margin-top: 30px;
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 10px;
+        max-width: 460px;
+      }
+      .spec {
+        border: 1px solid var(--line2);
+        border-radius: 10px;
+        padding: 12px 14px;
+        background: rgba(79, 215, 255, 0.04);
+      }
+      .spec b { display: block; font-size: 20px; color: var(--cyan); }
+      .spec span { font-size: 11px; color: var(--muted); letter-spacing: 0.04em; }
+      .cta {
+        margin-top: 32px;
+        display: inline-block;
+        background: var(--mag);
+        color: #fff;
+        text-decoration: none;
+        font-weight: 700;
+        padding: 14px 26px;
+        border-radius: 999px;
+      }
+      .draft { position: relative; height: 70vh; }
+      .draft svg { width: 100%; height: 100%; overflow: visible; }
+      .brand {
+        position: fixed;
+        top: 28px;
+        left: 48px;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        font-weight: 800;
+        letter-spacing: -0.01em;
+      }
+      .brand .opslogo {
+        width: 30px;
+        height: 30px;
+        display: inline-block;
+        background: #ec4899;
+        -webkit-mask: url(ops.png) center / contain no-repeat;
+        mask: url(ops.png) center / contain no-repeat;
+      }
+      .brand .m { color: #fff; }
+      .stamp {
+        position: fixed;
+        right: 40px;
+        bottom: 30px;
+        font-size: 11px;
+        color: var(--muted);
+        text-align: right;
+        letter-spacing: 0.05em;
+      }
+      .dash { stroke-dasharray: 4 5; }
+      text { fill: var(--muted); font: 11px ui-monospace, monospace; }
+      text.cy { fill: var(--cyan); }
+      @keyframes trace { to { stroke-dashoffset: 0; } }
+      .arc {
+        fill: none;
+        stroke: var(--mag);
+        stroke-width: 2;
+        stroke-dasharray: 900;
+        stroke-dashoffset: 900;
+        animation: trace 3.4s ease-out 0.3s forwards;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="grid"></div>
+    <div class="brand">
+      <span class="opslogo" role="img" aria-label="OpsRocket"></span>Ops<span
+        class="m"
+        >Rocket</span
+      >
+    </div>
+
+    <div class="wrap">
+      <div>
+        <span class="tag mono">DRAWING&nbsp;No.&nbsp;OR-RS-001 · REV 24.12</span>
+        <h1>
+          The OpenRocket core,<br />
+          re-drafted in Rust to<br />
+          <span class="hl">drafting tolerance.</span>
+        </h1>
+        <p class="lede">
+          Mass, centre of pressure and 6-DOF flight, reproduced from the
+          OpenRocket reference and checked against a flown, altimeter-measured
+          rocket.
+        </p>
+        <div class="specs mono">
+          <div class="spec"><b>17 / 17</b><span>EMPTY MASS · BIT-EXACT</span></div>
+          <div class="spec"><b>&lt; 1 cm</b><span>CP · ALL FIXTURES</span></div>
+          <div class="spec"><b>−0.0 %</b><span>C6-3 vs ALTIMETER</span></div>
+          <div class="spec"><b>0.967</b><span>2D BLUEPRINT IoU</span></div>
+        </div>
+        <a class="cta" href="/workspace">Open the workbench →</a>
+      </div>
+
+      <div class="draft">
+        <svg viewBox="0 0 460 540" preserveAspectRatio="xMidYMid meet">
+          <!-- centreline -->
+          <line class="dash" x1="60" y1="270" x2="430" y2="270" stroke="var(--line2)" />
+          <!-- rocket profile -->
+          <path
+            d="M70 270 L70 270
+               M70 270 C 110 248, 150 244, 175 244
+               L 330 244 L 360 230 L 405 270 L 360 310 L 330 296 L 175 296
+               C 150 296, 110 292, 70 270 Z"
+            fill="rgba(79,215,255,0.06)" stroke="var(--cyan)" stroke-width="1.6" />
+          <!-- fins -->
+          <path d="M300 296 L300 360 L355 320 L340 296 Z"
+                fill="rgba(255,95,162,0.10)" stroke="var(--mag)" stroke-width="1.4" />
+          <path d="M300 244 L300 180 L355 220 L340 244 Z"
+                fill="rgba(255,95,162,0.10)" stroke="var(--mag)" stroke-width="1.4" />
+          <!-- CG / CP markers -->
+          <circle cx="232" cy="270" r="7" fill="none" stroke="var(--cyan)" stroke-width="1.5" />
+          <path d="M232 263 A7 7 0 0 1 232 277 Z" fill="var(--cyan)" opacity="0.5" />
+          <circle cx="284" cy="270" r="5.5" fill="var(--mag)" />
+          <text class="cy" x="214" y="250">CG 53.8</text>
+          <text x="276" y="250">CP 60.5</text>
+          <!-- dimension -->
+          <line class="dash" x1="70" y1="395" x2="405" y2="395" stroke="var(--line2)" />
+          <line x1="70" y1="388" x2="70" y2="402" stroke="var(--line2)" />
+          <line x1="405" y1="388" x2="405" y2="402" stroke="var(--line2)" />
+          <text x="205" y="414">L = 80.6 cm</text>
+          <!-- flight arc -->
+          <path class="arc" d="M70 470 Q 250 300 430 150" />
+          <text class="cy" x="360" y="140">apogee Δ −0.0%</text>
+        </svg>
+      </div>
+    </div>
+
+    <div class="stamp mono">
+      OPSROCKET · RUST CORE · validated vs OpenRocket 24.12<br />
+      GPL-3.0 · third-party reimplementation · not affiliated
+    </div>
+  </body>
+</html>

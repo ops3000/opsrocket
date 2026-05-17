@@ -10,11 +10,12 @@
 //! regression test harness uses it as the ground-truth reference.
 
 use std::fs::File;
-use std::io::Read;
+use std::io::{Cursor, Read, Seek};
 use std::path::Path;
 
 use opsrocket_core::component::{
-    BodyTube, CenteringRing, Common, Component, ComponentId, DeployEvent, FinCrossSection, FinSet,
+    Appearance, BodyTube, CenteringRing, Common, Component, ComponentId, DeployEvent,
+    FinCrossSection, FinSet,
     FlightConfiguration, IgnitionEvent, InnerTube, LaunchLug, MassObject, MotorAssignment,
     MotorMount, NoseCone, NoseShape, Parachute, ReferenceType, Rocket, SeparationEvent, ShockCord,
     Stage, Transition,
@@ -50,6 +51,8 @@ pub struct OrkDocument {
     pub creator: String,
     pub rocket: Rocket,
     pub simulations: Vec<CachedSimulation>,
+    /// Decal images packed in the `.ork` zip: (archive path, PNG bytes).
+    pub decals: Vec<(String, Vec<u8>)>,
 }
 
 /// One `<simulation>` block. `cached` is `Some` if the file carries the
@@ -60,10 +63,23 @@ pub struct CachedSimulation {
     pub config_id: Option<String>,
     pub launch_rod_length: f64,
     pub launch_rod_angle: f64,
+    /// Launch rod azimuth (radians). OpenRocket default 0.
+    pub launch_rod_direction: f64,
     pub launch_altitude: f64,
     pub launch_temperature: f64,
     pub launch_pressure: f64,
+    /// Launch-site latitude (degrees). OpenRocket preference default 28.61.
+    pub launch_latitude: f64,
+    /// Launch-site longitude (degrees). OpenRocket default 0.
+    pub launch_longitude: f64,
+    /// Geodetic computation: "flat" | "spherical" | "wgs84"
+    /// (OpenRocket default "spherical").
+    pub geodetic_method: String,
     pub wind_average: f64,
+    /// Wind turbulence intensity (fraction). OpenRocket default 0.1.
+    pub wind_turbulence: f64,
+    /// Wind direction (radians). OpenRocket default π/2 (from east).
+    pub wind_direction: f64,
     pub time_step: f64,
     pub max_time: f64,
     pub cached: Option<CachedFlightData>,
@@ -99,16 +115,37 @@ pub struct FlightEvent {
 }
 
 /// Read a `.ork` file and return the parsed document.
+/// Load a `.ork` from a filesystem path.
 pub fn read_ork(path: impl AsRef<Path>) -> Result<OrkDocument> {
-    let file = File::open(path.as_ref())?;
-    let mut zip = zip::ZipArchive::new(file)?;
+    read_ork_zip(zip::ZipArchive::new(File::open(path.as_ref())?)?)
+}
+
+/// Load a `.ork` from an in-memory byte buffer (no filesystem — the WASM /
+/// browser entry point; native callers can use [`read_ork`]).
+pub fn read_ork_bytes(bytes: &[u8]) -> Result<OrkDocument> {
+    read_ork_zip(zip::ZipArchive::new(Cursor::new(bytes))?)
+}
+
+fn read_ork_zip<R: Read + Seek>(mut zip: zip::ZipArchive<R>) -> Result<OrkDocument> {
     let xml = {
         let mut entry = zip.by_name("rocket.ork").map_err(|_| Error::NoRocketEntry)?;
         let mut buf = String::new();
         entry.read_to_string(&mut buf)?;
         buf
     };
-    parse_xml(&xml)
+    let mut doc = parse_xml(&xml)?;
+    for i in 0..zip.len() {
+        let mut e = zip.by_index(i)?;
+        if !e.is_file() || e.name() == "rocket.ork" {
+            continue;
+        }
+        let name = e.name().to_string();
+        let mut bytes = Vec::new();
+        if e.read_to_end(&mut bytes).is_ok() && !bytes.is_empty() {
+            doc.decals.push((name, bytes));
+        }
+    }
+    Ok(doc)
 }
 
 /// Parse a `rocket.ork` XML string directly (no zip wrapper).
@@ -146,7 +183,7 @@ pub fn parse_xml(xml: &str) -> Result<OrkDocument> {
     }
 
     let rocket = rocket.ok_or_else(|| Error::Malformed("no <rocket>".into()))?;
-    Ok(OrkDocument { version, creator, rocket, simulations })
+    Ok(OrkDocument { version, creator, rocket, simulations, decals: Vec::new() })
 }
 
 // ============================================================================
@@ -255,7 +292,13 @@ fn parse_stage(reader: &mut Reader<&[u8]>) -> Result<Stage> {
                     b"subcomponents" => {
                         stage.children = parse_children(reader)?;
                     }
-                    _ => skip_to_end(reader, n.as_ref())?,
+                    // Stage-level mass/CG override (incl. overridemass +
+                    // overridesubcomponentsmass — assembly mass override).
+                    other => {
+                        if !parse_common_field(&mut stage.common, &e, reader)? {
+                            skip_to_end(reader, other)?;
+                        }
+                    }
                 }
             }
             Event::End(e) if e.name().as_ref() == b"stage" => break,
@@ -289,7 +332,23 @@ fn parse_children(reader: &mut Reader<&[u8]>) -> Result<Vec<Component>> {
                     b"shockcord" => Some(Component::ShockCord(parse_shockcord(reader)?)),
                     b"parachute" => Some(Component::Parachute(parse_parachute(reader)?)),
                     b"launchlug" => Some(Component::LaunchLug(parse_launchlug(reader)?)),
+                    b"railbutton" => Some(Component::LaunchLug(parse_railbutton(reader)?)),
                     b"centeringring" => Some(Component::CenteringRing(parse_centeringring(reader)?)),
+                    b"engineblock" => {
+                        Some(Component::CenteringRing(parse_ring_tagged(reader, b"engineblock", false)?))
+                    }
+                    b"tubecoupler" => {
+                        Some(Component::CenteringRing(parse_ring_tagged(reader, b"tubecoupler", false)?))
+                    }
+                    b"bulkhead" => {
+                        Some(Component::CenteringRing(parse_ring_tagged(reader, b"bulkhead", true)?))
+                    }
+                    b"tubefinset" => Some(Component::TubeFinSet(parse_tubefinset(reader)?)),
+                    b"podset" => Some(Component::PodSet(parse_podset(reader)?)),
+                    b"parallelstage" => Some(Component::PodSet(parse_podset_tagged(
+                        reader,
+                        b"parallelstage",
+                    )?)),
                     _ => {
                         skip_to_end(reader, n.as_ref())?;
                         None
@@ -345,6 +404,24 @@ fn parse_common_field(
             }
             Ok(true)
         }
+        b"angleoffset" => {
+            let txt = read_text(reader, b"angleoffset")?;
+            if let Ok(deg) = txt.parse::<f64>() {
+                common.angle_offset = deg.to_radians();
+            }
+            Ok(true)
+        }
+        b"radialdirection" => {
+            // Launch lugs / rail buttons use this; only adopt it if a
+            // fin-style <angleoffset> hasn't already set the azimuth.
+            let txt = read_text(reader, b"radialdirection")?;
+            if common.angle_offset == 0.0 {
+                if let Ok(deg) = txt.parse::<f64>() {
+                    common.angle_offset = deg.to_radians();
+                }
+            }
+            Ok(true)
+        }
         b"position" => {
             // Legacy form used by older .ork versions. Don't override the method
             // if a newer <axialoffset> already set it.
@@ -356,6 +433,10 @@ fn parse_common_field(
             common.material = parse_material(start, reader)?;
             Ok(true)
         }
+        b"appearance" => {
+            common.appearance = Some(parse_appearance(reader)?);
+            Ok(true)
+        }
         b"overridemass" => {
             common.mass_override = read_text(reader, b"overridemass")?.parse().ok();
             Ok(true)
@@ -364,8 +445,112 @@ fn parse_common_field(
             common.cg_override = read_text(reader, b"overridecg")?.parse().ok();
             Ok(true)
         }
+        b"overridesubcomponentsmass" => {
+            common.override_subcomponents_mass =
+                read_text(reader, b"overridesubcomponentsmass")?.trim() == "true";
+            Ok(true)
+        }
         _ => Ok(false),
     }
+}
+
+/// Parse `<appearance>`: `<paint red green blue alpha/>`, `<shine>v</shine>`,
+/// and an optional `<decal name= rotation= edgemode= >` with
+/// `<center/> <offset/> <scale/>` children.
+fn parse_appearance(reader: &mut Reader<&[u8]>) -> Result<Appearance> {
+    use opsrocket_core::component::Decal;
+    let mut paint = [160u8, 160, 160, 255];
+    let mut shine = 0.3_f64;
+    let mut decal: Option<Decal> = None;
+    let mut buf = Vec::new();
+    let attr_u8 = |s: &quick_xml::events::BytesStart<'_>, k: &[u8]| -> u8 {
+        for a in s.attributes().with_checks(false).flatten() {
+            if a.key.as_ref() == k {
+                if let Ok(v) = a.unescape_value() {
+                    return v.parse::<f64>().unwrap_or(0.0).round().clamp(0.0, 255.0) as u8;
+                }
+            }
+        }
+        255
+    };
+    let attr_str = |s: &quick_xml::events::BytesStart<'_>, k: &[u8]| -> String {
+        for a in s.attributes().with_checks(false).flatten() {
+            if a.key.as_ref() == k {
+                if let Ok(v) = a.unescape_value() {
+                    return v.into_owned();
+                }
+            }
+        }
+        String::new()
+    };
+    let attr_f = |s: &quick_xml::events::BytesStart<'_>, k: &[u8]| -> f64 {
+        for a in s.attributes().with_checks(false).flatten() {
+            if a.key.as_ref() == k {
+                if let Ok(v) = a.unescape_value() {
+                    return v.parse().unwrap_or(0.0);
+                }
+            }
+        }
+        0.0
+    };
+    let new_decal = |e: &quick_xml::events::BytesStart<'_>| Decal {
+        name: attr_str(e, b"name"),
+        rotation: attr_f(e, b"rotation"),
+        edge_mode: {
+            let m = attr_str(e, b"edgemode");
+            if m.is_empty() { "REPEAT".into() } else { m }
+        },
+        center: [0.0, 0.0],
+        offset: [0.0, 0.0],
+        scale: [1.0, 1.0],
+    };
+    loop {
+        match reader.read_event_into(&mut buf)? {
+            Event::Empty(e) | Event::Start(e) if e.name().as_ref() == b"paint" => {
+                paint = [
+                    attr_u8(&e, b"red"),
+                    attr_u8(&e, b"green"),
+                    attr_u8(&e, b"blue"),
+                    attr_u8(&e, b"alpha"),
+                ];
+            }
+            Event::Start(e) if e.name().as_ref() == b"shine" => {
+                shine = read_text(reader, b"shine")?.trim().parse().unwrap_or(0.3);
+            }
+            Event::Empty(e) if e.name().as_ref() == b"decal" => {
+                decal = Some(new_decal(&e));
+            }
+            Event::Start(e) if e.name().as_ref() == b"decal" => {
+                let mut d = new_decal(&e);
+                let mut sb = Vec::new();
+                loop {
+                    match reader.read_event_into(&mut sb)? {
+                        Event::Empty(c) | Event::Start(c) => {
+                            let xy = [attr_f(&c, b"x"), attr_f(&c, b"y")];
+                            match c.name().as_ref() {
+                                b"center" => d.center = xy,
+                                b"offset" => d.offset = xy,
+                                b"scale" => d.scale = xy,
+                                _ => {}
+                            }
+                        }
+                        Event::End(c) if c.name().as_ref() == b"decal" => break,
+                        Event::Eof => {
+                            return Err(Error::Malformed("EOF inside <decal>".into()))
+                        }
+                        _ => {}
+                    }
+                    sb.clear();
+                }
+                decal = Some(d);
+            }
+            Event::End(e) if e.name().as_ref() == b"appearance" => break,
+            Event::Eof => return Err(Error::Malformed("EOF inside <appearance>".into())),
+            _ => {}
+        }
+        buf.clear();
+    }
+    Ok(Appearance { paint, shine: shine.clamp(0.0, 1.0), decal })
 }
 
 fn parse_material(
@@ -410,6 +595,8 @@ fn parse_nosecone(reader: &mut Reader<&[u8]>) -> Result<NoseCone> {
         aft_shoulder_thickness: 0.0,
         aft_shoulder_capped: false,
         is_flipped: false,
+        filled: false,
+        children: Vec::new(),
     };
     let mut buf = Vec::new();
     loop {
@@ -436,7 +623,16 @@ fn parse_nosecone(reader: &mut Reader<&[u8]>) -> Result<NoseCone> {
                         }
                         b"length" => nc.length = parse_f64(reader, b"length")?,
                         b"aftradius" => nc.aft_radius = parse_f64_or_auto(reader, b"aftradius")?.unwrap_or(0.0),
-                        b"thickness" => nc.thickness = parse_f64(reader, b"thickness")?,
+                        b"thickness" => {
+                            // OpenRocket encodes a solid nose as the literal
+                            // string `<thickness>filled</thickness>`.
+                            let v = read_text(reader, b"thickness")?;
+                            if v.trim() == "filled" {
+                                nc.filled = true;
+                            } else if let Ok(t) = v.trim().parse::<f64>() {
+                                nc.thickness = t;
+                            }
+                        }
                         b"aftshoulderradius" => nc.aft_shoulder_radius = parse_f64(reader, b"aftshoulderradius")?,
                         b"aftshoulderlength" => nc.aft_shoulder_length = parse_f64(reader, b"aftshoulderlength")?,
                         b"aftshoulderthickness" => nc.aft_shoulder_thickness = parse_f64(reader, b"aftshoulderthickness")?,
@@ -446,6 +642,10 @@ fn parse_nosecone(reader: &mut Reader<&[u8]>) -> Result<NoseCone> {
                         b"isflipped" => {
                             nc.is_flipped = read_text(reader, b"isflipped")? == "true";
                         }
+                        b"filled" => {
+                            nc.filled = read_text(reader, b"filled")? == "true";
+                        }
+                        b"subcomponents" => nc.children = parse_children(reader)?,
                         other => skip_to_end(reader, other)?,
                     }
                 }
@@ -504,6 +704,8 @@ fn parse_transition(reader: &mut Reader<&[u8]>) -> Result<Transition> {
         fore_radius: 0.0,
         aft_radius: 0.0,
         thickness: 0.0,
+        filled: false,
+        children: Vec::new(),
     };
     let mut buf = Vec::new();
     loop {
@@ -529,7 +731,18 @@ fn parse_transition(reader: &mut Reader<&[u8]>) -> Result<Transition> {
                         b"length" => tr.length = parse_f64(reader, b"length")?,
                         b"foreradius" => tr.fore_radius = parse_f64_or_auto(reader, b"foreradius")?.unwrap_or(0.0),
                         b"aftradius" => tr.aft_radius = parse_f64_or_auto(reader, b"aftradius")?.unwrap_or(0.0),
-                        b"thickness" => tr.thickness = parse_f64(reader, b"thickness")?,
+                        b"thickness" => {
+                            let v = read_text(reader, b"thickness")?;
+                            if v.trim() == "filled" {
+                                tr.filled = true;
+                            } else if let Ok(t) = v.trim().parse::<f64>() {
+                                tr.thickness = t;
+                            }
+                        }
+                        b"filled" => {
+                            tr.filled = read_text(reader, b"filled")? == "true";
+                        }
+                        b"subcomponents" => tr.children = parse_children(reader)?,
                         other => skip_to_end(reader, other)?,
                     }
                 }
@@ -543,6 +756,23 @@ fn parse_transition(reader: &mut Reader<&[u8]>) -> Result<Transition> {
     Ok(tr)
 }
 
+/// OpenRocket `ClusterConfiguration` xml-name → physical tube count
+/// (= number of (x,y) point pairs). Unknown → single.
+fn cluster_count(name: &str) -> u32 {
+    match name.trim() {
+        "single" => 1,
+        "double" => 2,
+        "3-row" | "3-ring" => 3,
+        "4-row" | "4-ring" | "3-star" => 4,
+        "5-ring" | "4-star" => 5,
+        "6-ring" | "5-star" => 6,
+        "6-star" => 7,
+        "9-grid" => 9,
+        "9-star" => 10,
+        _ => 1,
+    }
+}
+
 fn parse_innertube(reader: &mut Reader<&[u8]>) -> Result<InnerTube> {
     let mut it = InnerTube {
         common: Common::new("", "Inner tube"),
@@ -550,6 +780,8 @@ fn parse_innertube(reader: &mut Reader<&[u8]>) -> Result<InnerTube> {
         outer_radius: 0.0,
         inner_radius: 0.0,
         motor_mount: None,
+        children: Vec::new(),
+        cluster_count: 1,
     };
     let mut buf = Vec::new();
     loop {
@@ -560,6 +792,7 @@ fn parse_innertube(reader: &mut Reader<&[u8]>) -> Result<InnerTube> {
                     /* handled */
                 } else {
                     match n.as_ref() {
+                        b"subcomponents" => it.children = parse_children(reader)?,
                         b"length" => it.length = parse_f64(reader, b"length")?,
                         b"radius" => {
                             let r = parse_f64(reader, b"radius")?;
@@ -573,6 +806,10 @@ fn parse_innertube(reader: &mut Reader<&[u8]>) -> Result<InnerTube> {
                             it.inner_radius = (it.outer_radius - t).max(0.0);
                         }
                         b"motormount" => it.motor_mount = Some(parse_motor_mount(reader)?),
+                        b"clusterconfiguration" => {
+                            let v = read_text(reader, b"clusterconfiguration")?;
+                            it.cluster_count = cluster_count(&v);
+                        }
                         other => skip_to_end(reader, other)?,
                     }
                 }
@@ -586,6 +823,35 @@ fn parse_innertube(reader: &mut Reader<&[u8]>) -> Result<InnerTube> {
     Ok(it)
 }
 
+/// Parse a freeform fin's `<finpoints>` block: a series of
+/// `<point x="" y=""/>` elements (chordwise, spanwise) in metres.
+fn parse_finpoints(reader: &mut Reader<&[u8]>) -> Result<Vec<[f64; 2]>> {
+    let mut pts = Vec::new();
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf)? {
+            Event::Empty(e) | Event::Start(e) if e.name().as_ref() == b"point" => {
+                let mut x = 0.0;
+                let mut y = 0.0;
+                for a in e.attributes().with_checks(false).flatten() {
+                    let v = a.unescape_value().unwrap_or_default();
+                    match a.key.as_ref() {
+                        b"x" => x = v.parse().unwrap_or(0.0),
+                        b"y" => y = v.parse().unwrap_or(0.0),
+                        _ => {}
+                    }
+                }
+                pts.push([x, y]);
+            }
+            Event::End(e) if e.name().as_ref() == b"finpoints" => break,
+            Event::Eof => return Err(Error::Malformed("EOF inside <finpoints>".into())),
+            _ => {}
+        }
+        buf.clear();
+    }
+    Ok(pts)
+}
+
 fn parse_finset(reader: &mut Reader<&[u8]>, tag: &[u8]) -> Result<FinSet> {
     let mut fs = FinSet {
         common: Common::new("", "Fin set"),
@@ -597,6 +863,15 @@ fn parse_finset(reader: &mut Reader<&[u8]>, tag: &[u8]) -> Result<FinSet> {
         thickness: 0.003,
         cant_angle: 0.0,
         cross_section: FinCrossSection::Square,
+        shape: match tag {
+            b"ellipticalfinset" => opsrocket_core::component::FinShape::Elliptical,
+            b"freeformfinset" => opsrocket_core::component::FinShape::Freeform,
+            _ => opsrocket_core::component::FinShape::Trapezoidal,
+        },
+        points: Vec::new(),
+        tab_length: 0.0,
+        tab_height: 0.0,
+        fillet_radius: 0.0,
     };
     let mut buf = Vec::new();
     loop {
@@ -608,12 +883,20 @@ fn parse_finset(reader: &mut Reader<&[u8]>, tag: &[u8]) -> Result<FinSet> {
                 } else {
                     match n.as_ref() {
                         b"fincount" => fs.fin_count = parse_u32(reader, b"fincount")?,
+                        b"tablength" => fs.tab_length = parse_f64(reader, b"tablength")?,
+                        b"tabheight" => fs.tab_height = parse_f64(reader, b"tabheight")?,
+                        b"filletradius" => fs.fillet_radius = parse_f64(reader, b"filletradius")?,
                         b"rootchord" => fs.root_chord = parse_f64(reader, b"rootchord")?,
                         b"tipchord" => fs.tip_chord = parse_f64(reader, b"tipchord")?,
                         b"sweeplength" => fs.sweep_length = parse_f64(reader, b"sweeplength")?,
                         b"height" => fs.height = parse_f64(reader, b"height")?,
                         b"thickness" => fs.thickness = parse_f64(reader, b"thickness")?,
-                        b"cant" => fs.cant_angle = parse_f64(reader, b"cant")?,
+                        // OpenRocket stores <cant> in DEGREES
+                        // (FinSetSaver: Math.toDegrees; loader ×π/180).
+                        b"cant" => {
+                            fs.cant_angle = parse_f64(reader, b"cant")?.to_radians()
+                        }
+                        b"finpoints" => fs.points = parse_finpoints(reader)?,
                         b"crosssection" => {
                             let v = read_text(reader, b"crosssection")?;
                             fs.cross_section = match v.as_str() {
@@ -800,13 +1083,70 @@ fn parse_launchlug(reader: &mut Reader<&[u8]>) -> Result<LaunchLug> {
     Ok(l)
 }
 
+/// Rail buttons are modelled as a short surface stub (a stand-in for the
+/// mushroom shape) so they appear in the 3D view at the right station and
+/// azimuth. Mass/aero treat them as negligible (as OpenRocket largely does).
+fn parse_railbutton(reader: &mut Reader<&[u8]>) -> Result<LaunchLug> {
+    let mut l = LaunchLug {
+        common: Common::new("", "Rail button"),
+        length: 0.005,
+        outer_radius: 0.005,
+        inner_radius: 0.0,
+        instance_count: 1,
+    };
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf)? {
+            Event::Start(e) => {
+                let n = e.name();
+                if parse_common_field(&mut l.common, &e, reader)? {
+                    /* handled */
+                } else {
+                    match n.as_ref() {
+                        b"outerdiameter" => {
+                            l.outer_radius = parse_f64(reader, b"outerdiameter")? * 0.5;
+                        }
+                        b"totalheight" | b"height" => {
+                            l.length = parse_f64(reader, n.as_ref())?.max(1e-4);
+                        }
+                        b"instancecount" => {
+                            l.instance_count = parse_u32(reader, b"instancecount")?.max(1);
+                        }
+                        other => skip_to_end(reader, other)?,
+                    }
+                }
+            }
+            Event::End(e) if e.name().as_ref() == b"railbutton" => break,
+            Event::Eof => return Err(Error::Malformed("EOF inside <railbutton>".into())),
+            _ => {}
+        }
+        buf.clear();
+    }
+    Ok(l)
+}
+
 fn parse_centeringring(reader: &mut Reader<&[u8]>) -> Result<CenteringRing> {
+    parse_ring_tagged(reader, b"centeringring", false)
+}
+
+/// Shared parser for thickness-ring parts: `<centeringring>`, `<engineblock>`,
+/// `<tubecoupler>`, `<bulkhead>` — geometrically a ring (outer/inner radius
+/// or outer + wall thickness). Parameterised by the closing tag.
+fn parse_ring_tagged(
+    reader: &mut Reader<&[u8]>,
+    end: &[u8],
+    solid: bool,
+) -> Result<CenteringRing> {
     let mut c = CenteringRing {
         common: Common::new("", "Centering ring"),
         length: 0.0,
         outer_radius: 0.0,
         inner_radius: 0.0,
+        thickness: 0.0,
+        thickness_set: false,
         instance_count: 1,
+        children: Vec::new(),
+        solid,
     };
     let mut buf = Vec::new();
     loop {
@@ -817,6 +1157,7 @@ fn parse_centeringring(reader: &mut Reader<&[u8]>) -> Result<CenteringRing> {
                     /* handled */
                 } else {
                     match n.as_ref() {
+                        b"subcomponents" => c.children = parse_children(reader)?,
                         b"length" => c.length = parse_f64(reader, b"length")?,
                         b"outerradius" => {
                             c.outer_radius = parse_f64_or_auto(reader, b"outerradius")?.unwrap_or(0.0);
@@ -824,18 +1165,115 @@ fn parse_centeringring(reader: &mut Reader<&[u8]>) -> Result<CenteringRing> {
                         b"innerradius" => {
                             c.inner_radius = parse_f64_or_auto(reader, b"innerradius")?.unwrap_or(0.0);
                         }
+                        b"thickness" => {
+                            c.thickness = parse_f64(reader, b"thickness")?;
+                            c.thickness_set = true;
+                        }
                         b"instancecount" => c.instance_count = parse_u32(reader, b"instancecount")?.max(1),
                         other => skip_to_end(reader, other)?,
                     }
                 }
             }
-            Event::End(e) if e.name().as_ref() == b"centeringring" => break,
-            Event::Eof => return Err(Error::Malformed("EOF inside <centeringring>".into())),
+            Event::End(e) if e.name().as_ref() == end => break,
+            Event::Eof => return Err(Error::Malformed("EOF inside ring component".into())),
             _ => {}
         }
         buf.clear();
     }
     Ok(c)
+}
+
+fn parse_tubefinset(
+    reader: &mut Reader<&[u8]>,
+) -> Result<opsrocket_core::component::TubeFinSet> {
+    let mut t = opsrocket_core::component::TubeFinSet {
+        common: Common::new("", "Tube fin set"),
+        fin_count: 6,
+        length: 0.0,
+        outer_radius: None, // <radius>auto</radius> is the default
+        thickness: 0.0,
+    };
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf)? {
+            Event::Start(e) => {
+                let n = e.name();
+                if parse_common_field(&mut t.common, &e, reader)? {
+                    /* handled (incl. angleoffset → common.angle_offset) */
+                } else {
+                    match n.as_ref() {
+                        b"fincount" => t.fin_count = parse_u32(reader, b"fincount")?.max(1),
+                        b"length" => t.length = parse_f64(reader, b"length")?,
+                        b"radius" => {
+                            t.outer_radius = parse_f64_or_auto(reader, b"radius")?;
+                        }
+                        b"thickness" => t.thickness = parse_f64(reader, b"thickness")?,
+                        other => skip_to_end(reader, other)?,
+                    }
+                }
+            }
+            Event::End(e) if e.name().as_ref() == b"tubefinset" => break,
+            Event::Eof => return Err(Error::Malformed("EOF inside <tubefinset>".into())),
+            _ => {}
+        }
+        buf.clear();
+    }
+    Ok(t)
+}
+
+fn parse_podset(reader: &mut Reader<&[u8]>) -> Result<opsrocket_core::component::PodSet> {
+    parse_podset_tagged(reader, b"podset")
+}
+
+/// `<parallelstage>` (strap-on boosters) is, geometrically, identical to a
+/// `<podset>` — a radially-mounted instanced sub-assembly. Render it as one.
+fn parse_podset_tagged(
+    reader: &mut Reader<&[u8]>,
+    end: &[u8],
+) -> Result<opsrocket_core::component::PodSet> {
+    let mut p = opsrocket_core::component::PodSet {
+        common: Common::new("", "Pod set"),
+        instance_count: 1,
+        radius_offset: 0.0,
+        radius_method: "relative".to_string(),
+        is_parallel_stage: end == b"parallelstage",
+        children: Vec::new(),
+    };
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf)? {
+            Event::Start(e) => {
+                let n = e.name();
+                if parse_common_field(&mut p.common, &e, reader)? {
+                    /* handled (incl. angleoffset → common.angle_offset) */
+                } else {
+                    match n.as_ref() {
+                        b"instancecount" => {
+                            p.instance_count =
+                                parse_u32(reader, b"instancecount")?.max(1);
+                        }
+                        b"radiusoffset" => {
+                            if let Ok(Some(a)) = e.try_get_attribute("method") {
+                                if let Ok(v) = a.unescape_value() {
+                                    p.radius_method = v.to_ascii_lowercase();
+                                }
+                            }
+                            p.radius_offset = parse_f64(reader, b"radiusoffset")?;
+                        }
+                        b"subcomponents" => {
+                            p.children = parse_children(reader)?;
+                        }
+                        other => skip_to_end(reader, other)?,
+                    }
+                }
+            }
+            Event::End(e) if e.name().as_ref() == end => break,
+            Event::Eof => return Err(Error::Malformed("EOF inside <podset>".into())),
+            _ => {}
+        }
+        buf.clear();
+    }
+    Ok(p)
 }
 
 fn parse_motor_mount(reader: &mut Reader<&[u8]>) -> Result<MotorMount> {
@@ -932,7 +1370,12 @@ fn parse_simulation(reader: &mut Reader<&[u8]>) -> Result<CachedSimulation> {
         launch_altitude: 0.0,
         launch_temperature: 288.15,
         launch_pressure: 101_325.0,
+        launch_latitude: 28.61,
+        launch_longitude: 0.0,
+        geodetic_method: "spherical".to_string(),
         wind_average: 0.0,
+        wind_turbulence: 0.1,
+        wind_direction: std::f64::consts::FRAC_PI_2,
         time_step: 0.05,
         max_time: 1200.0,
         cached: None,

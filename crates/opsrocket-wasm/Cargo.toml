@@ -1,0 +1,21 @@
+[package]
+name = "opsrocket-wasm"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Browser/WASM entry point: load a .ork from bytes, return the view + stability JSON (no filesystem, no server)."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+opsrocket-core = { path = "../opsrocket-core" }
+opsrocket-io = { path = "../opsrocket-io" }
+opsrocket-sim = { path = "../opsrocket-sim" }
+opsrocket-view = { path = "../opsrocket-view" }
+wasm-bindgen = "0.2"
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true

@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "File I/O for OpsRocket: .ork reader/writer and motor file parsers"
+build = "build.rs"
 
 [dependencies]
 opsrocket-core = { workspace = true }

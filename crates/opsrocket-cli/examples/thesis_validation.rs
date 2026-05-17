@@ -67,6 +67,8 @@ fn thesis_rocket(empty_mass_override: f64) -> Rocket {
         thickness: 0.002,
         cant_angle: 0.0,
         cross_section: FinCrossSection::Square, // "left rectangular" per thesis
+        shape: Default::default(),
+        points: Vec::new(),
     };
 
     // Body tube: 56 cm total − 10 cm nose = 46 cm. Apply the measured
@@ -123,6 +125,7 @@ fn run(designation: &str, ejection: f64, empty_mass: f64) -> f64 {
         creator: "thesis".into(),
         rocket,
         simulations: vec![sim],
+        decals: Vec::new(),
     };
     let motors = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

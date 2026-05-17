@@ -10,3 +10,4 @@ opsrocket-core = { workspace = true }
 opsrocket-io   = { workspace = true }
 opsrocket-sim  = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }

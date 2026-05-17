@@ -53,6 +53,32 @@ impl Default for AxialMethod {
     }
 }
 
+/// Visual appearance (OpenRocket `<appearance>`): surface paint colour,
+/// gloss, and an optional decal image name. Drives the 3D "Finished" view.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Appearance {
+    /// sRGB paint colour, RGBA 0..=255.
+    pub paint: [u8; 4],
+    /// Gloss 0 (matte) .. 1 (mirror).
+    pub shine: f64,
+    /// Decal (texture) applied over the paint, if any.
+    #[serde(default)]
+    pub decal: Option<Decal>,
+}
+
+/// A decal: an image from the `.ork` archive mapped onto the surface,
+/// with OpenRocket's center / offset / scale / rotation transform.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Decal {
+    /// Archive path, e.g. `decals/BodyStripe.png`.
+    pub name: String,
+    pub rotation: f64,
+    pub edge_mode: String,
+    pub center: [f64; 2],
+    pub offset: [f64; 2],
+    pub scale: [f64; 2],
+}
+
 /// Fields shared by every component.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Common {
@@ -60,16 +86,28 @@ pub struct Common {
     pub name: String,
     pub axial_method: AxialMethod,
     pub axial_offset: f64,
+    /// Angular position about the rocket axis (radians). From OpenRocket
+    /// `<angleoffset>` (fin sets, pods) or `<radialdirection>` (launch lugs,
+    /// rail buttons). Drives where the part sits in the 3D view.
+    #[serde(default)]
+    pub angle_offset: f64,
     /// Override flags - if any are set, the explicit override value is used
     /// instead of the computed value.
     #[serde(default)]
     pub mass_override: Option<f64>,
     #[serde(default)]
     pub cg_override: Option<f64>,
+    /// `<overridesubcomponentsmass>`: when true, `mass_override` replaces
+    /// the mass of this component AND its entire subtree (children then
+    /// contribute nothing). OpenRocket assembly-level mass override.
+    #[serde(default)]
+    pub override_subcomponents_mass: bool,
     /// Material the component is made of. May be `None` for assemblies that
     /// have no intrinsic mass.
     #[serde(default)]
     pub material: Option<Material>,
+    #[serde(default)]
+    pub appearance: Option<Appearance>,
 }
 
 impl Common {
@@ -79,9 +117,12 @@ impl Common {
             name: name.into(),
             axial_method: AxialMethod::After,
             axial_offset: 0.0,
+            angle_offset: 0.0,
             mass_override: None,
             cg_override: None,
+            override_subcomponents_mass: false,
             material: None,
+            appearance: None,
         }
     }
 }
@@ -127,6 +168,14 @@ pub struct NoseCone {
     pub aft_shoulder_capped: bool,
     #[serde(default)]
     pub is_flipped: bool,
+    /// Solid (filled) vs hollow shell — `<filled>` in the .ork. A filled
+    /// nose is the full solid-of-revolution mass, not a wall shell.
+    #[serde(default)]
+    pub filled: bool,
+    /// Components mounted inside the nose (ballast/mass, electronics,
+    /// recovery, …). OpenRocket nests these; they carry real mass.
+    #[serde(default)]
+    pub children: Vec<Component>,
 }
 
 /// Body tube component.
@@ -155,6 +204,12 @@ pub struct Transition {
     pub fore_radius: f64,
     pub aft_radius: f64,
     pub thickness: f64,
+    /// Solid (filled) vs hollow shell — `<filled>` in the .ork.
+    #[serde(default)]
+    pub filled: bool,
+    /// Nested components (couplers, mass, …) inside the transition.
+    #[serde(default)]
+    pub children: Vec<Component>,
 }
 
 /// Inner tube (engine block, coupler, motor mount, etc.).
@@ -166,6 +221,15 @@ pub struct InnerTube {
     pub inner_radius: f64,
     #[serde(default)]
     pub motor_mount: Option<MotorMount>,
+    /// Nested components (engine block, centering rings, …) inside the
+    /// motor-mount tube. OpenRocket carries these as children; they
+    /// contribute structural mass and must be walked.
+    #[serde(default)]
+    pub children: Vec<Component>,
+    /// Physical tube count from `<clusterconfiguration>` (1 = single,
+    /// 3 = "3-ring", …). The whole inner-tube assembly is replicated.
+    #[serde(default = "default_lug_count")]
+    pub cluster_count: u32,
 }
 
 /// Generic point-mass component (lump of mass at a specified offset).
@@ -234,8 +298,27 @@ pub struct CenteringRing {
     pub length: f64,
     pub outer_radius: f64,
     pub inner_radius: f64,
+    /// Wall thickness (m). Used by engine blocks / thickness-ring parts
+    /// where the .ork gives `<thickness>` + `<outerradius>auto` instead of
+    /// explicit inner/outer radii; inner = outer − thickness post-resolve.
+    #[serde(default)]
+    pub thickness: f64,
+    /// Whether the .ork gave an explicit `<thickness>` tag. A tube coupler
+    /// with `<thickness>0</thickness>` is a zero-wall tube (0 mass) — must
+    /// be distinguished from a plain centering ring that has no thickness
+    /// tag and instead derives its bore from the motor-mount tube.
+    #[serde(default)]
+    pub thickness_set: bool,
     #[serde(default = "default_lug_count")]
     pub instance_count: u32,
+    /// Nested components (a tube coupler can carry bulkheads / mass
+    /// components / etc. inside it). Empty for plain rings/bulkheads.
+    #[serde(default)]
+    pub children: Vec<Component>,
+    /// True for `<bulkhead>` — a solid disc (inner radius 0), as opposed
+    /// to a hollow ring/coupler.
+    #[serde(default)]
+    pub solid: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -247,6 +330,51 @@ pub enum DeployEvent {
     Altitude,
     LowerStageSeparation,
     Never,
+}
+
+/// A pod set: a sub-assembly (its own nose/body/fins) mounted radially off
+/// the parent, instanced `instance_count` times evenly around the axis.
+/// Mirrors OpenRocket `<podset>`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PodSet {
+    pub common: Common,
+    #[serde(default = "default_lug_count")]
+    pub instance_count: u32,
+    /// Radial offset value (m); meaning depends on `radius_method`.
+    #[serde(default)]
+    pub radius_offset: f64,
+    /// OpenRocket RadiusMethod: "relative" (offset+parentR+podR),
+    /// "surface" (parentR+podR), "free"/"absolute" (offset from axis),
+    /// "coaxial" (0). Default RELATIVE.
+    #[serde(default = "default_radius_method")]
+    pub radius_method: String,
+    /// True when this came from `<parallelstage>` rather than `<podset>`.
+    /// Geometrically identical, but OpenRocket's figure palette differs
+    /// (ParallelStage 198,163,184 vs PodSet 160,160,215).
+    #[serde(default)]
+    pub is_parallel_stage: bool,
+    #[serde(default)]
+    pub children: Vec<Component>,
+}
+
+fn default_radius_method() -> String {
+    "relative".to_string()
+}
+
+/// Tube fin set — a ring of `fin_count` tubes around the body, each acting
+/// as a stabilising surface. Mirrors OpenRocket `<tubefinset>`
+/// (`TubeFinSet` / `ComponentRenderer.renderTubeFins`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TubeFinSet {
+    pub common: Common,
+    #[serde(default = "default_lug_count")]
+    pub fin_count: u32,
+    pub length: f64,
+    /// Outer radius of each tube. `None` = "auto" (= parent body radius,
+    /// the OpenRocket default — each tube the same size as the airframe).
+    #[serde(default)]
+    pub outer_radius: Option<f64>,
+    pub thickness: f64,
 }
 
 /// Trapezoidal fin set (the only profile required for the canonical examples).
@@ -263,6 +391,33 @@ pub struct FinSet {
     /// Fin cross-section shape (square / rounded / airfoil) - simple drag model.
     #[serde(default)]
     pub cross_section: FinCrossSection,
+    /// Planform shape. Trapezoidal uses root/tip/sweep/height; Elliptical is
+    /// a quarter-ellipse of root_chord × height; Freeform uses `points`.
+    #[serde(default)]
+    pub shape: FinShape,
+    /// Freeform planform outline: (chordwise, spanwise) metres from the
+    /// root leading edge, used only when `shape == Freeform`.
+    #[serde(default)]
+    pub points: Vec<[f64; 2]>,
+    /// Root-tab rectangle (the part of the fin buried in the body tube).
+    /// Adds `tab_length·tab_height·thickness·ρ` per fin to the mass.
+    #[serde(default)]
+    pub tab_length: f64,
+    #[serde(default)]
+    pub tab_height: f64,
+    /// Root-fillet radius (m); a concave-cylinder fillet either side of
+    /// each fin root. 0 = none.
+    #[serde(default)]
+    pub fillet_radius: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum FinShape {
+    #[default]
+    Trapezoidal,
+    Elliptical,
+    Freeform,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -320,6 +475,8 @@ pub enum Component {
     ShockCord(ShockCord),
     LaunchLug(LaunchLug),
     CenteringRing(CenteringRing),
+    PodSet(PodSet),
+    TubeFinSet(TubeFinSet),
 }
 
 impl Component {
@@ -335,6 +492,8 @@ impl Component {
             Component::ShockCord(c) => &c.common,
             Component::LaunchLug(c) => &c.common,
             Component::CenteringRing(c) => &c.common,
+            Component::PodSet(c) => &c.common,
+            Component::TubeFinSet(c) => &c.common,
         }
     }
 
@@ -345,12 +504,44 @@ impl Component {
             Component::BodyTube(c) => c.length,
             Component::Transition(c) => c.length,
             Component::InnerTube(c) => c.length,
-            Component::FinSet(c) => c.root_chord,
+            // OpenRocket's fin "length" is the chordwise planform extent
+            // (FinSet.length). Trapezoidal/elliptical use the root chord;
+            // freeform uses the point span (FreeformFinSet:
+            // length = points[last].x - points[0].x). This drives axial
+            // (After/Bottom) placement, so a freeform fin must report its
+            // real chord or it collapses to length 0 at the parent's aft.
+            Component::FinSet(c) => {
+                if matches!(c.shape, FinShape::Freeform) && c.points.len() >= 2 {
+                    let xs = c.points.iter().map(|p| p[0]);
+                    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+                    for x in xs {
+                        lo = lo.min(x);
+                        hi = hi.max(x);
+                    }
+                    (hi - lo).max(0.0)
+                } else {
+                    c.root_chord
+                }
+            }
             Component::MassObject(c) => c.length,
             Component::Parachute(c) => c.packed_length,
             Component::ShockCord(c) => c.packed_length,
             Component::LaunchLug(c) => c.length,
             Component::CenteringRing(c) => c.length,
+            Component::PodSet(c) => c
+                .children
+                .iter()
+                .filter(|x| {
+                    matches!(
+                        x,
+                        Component::NoseCone(_)
+                            | Component::BodyTube(_)
+                            | Component::Transition(_)
+                    )
+                })
+                .map(|x| x.length())
+                .sum(),
+            Component::TubeFinSet(c) => c.length,
         }
     }
 
@@ -471,6 +662,7 @@ fn iter_components_in(slice: &[Component]) -> Box<dyn Iterator<Item = &Component
         let here = std::iter::once(c);
         let inner: Box<dyn Iterator<Item = &Component>> = match c {
             Component::BodyTube(t) => Box::new(iter_components_in(&t.children)),
+            Component::PodSet(p) => Box::new(iter_components_in(&p.children)),
             _ => Box::new(std::iter::empty()),
         };
         here.chain(inner)

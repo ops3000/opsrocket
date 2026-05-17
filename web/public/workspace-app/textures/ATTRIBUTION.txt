@@ -1,0 +1,7 @@
+Texture assets in this directory (and motors/) are vendored verbatim from
+OpenRocket (swing/src/main/resources/datafiles/textures) to reproduce
+OpenRocket's 3D component appearances 1:1.
+
+OpenRocket — A model rocket simulator
+Copyright (C) 2007-2025 Sampo Niskanen and others
+Licensed under the GNU GPL, same license as this project.

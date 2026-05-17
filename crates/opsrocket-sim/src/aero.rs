@@ -15,12 +15,15 @@
 //!   - `cpCache  = (L·A1 − V_full) / (A1 − A0)` — slender-body CP
 //!   - `BODY_LIFT_K = 1.1` — Galejs body-lift coefficient
 
-use opsrocket_core::component::{Component, FinSet, NoseCone, Rocket, Transition};
+use opsrocket_core::component::{
+    Common, Component, FinCrossSection, FinSet, FinShape, NoseCone, Rocket, Transition,
+    TubeFinSet,
+};
 use opsrocket_core::mathx::pow2;
 use opsrocket_core::profile::{shape_integrals, ShapeIntegrals};
 use opsrocket_core::units::PI;
 
-use crate::mass::iter_layout;
+use crate::mass::{iter_layout, iter_layout_reps};
 
 /// Aerodynamic coefficients at a flight condition.
 #[derive(Debug, Clone, Copy, Default)]
@@ -65,6 +68,65 @@ pub fn compute(rocket: &Rocket, fc: FlightConditions) -> AeroCoefficients {
     compute_with(rocket, fc, false)
 }
 
+/// Per-component aerodynamic breakdown (name, CNa, absolute CP_x metres)
+/// for the CNa-contributing parts — mirrors OpenRocket
+/// `BarrowmanCalculator.getForceAnalysis` so CP deltas can be localised
+/// the same way the mass `COMP|` diff localises mass. Body lift is omitted
+/// (its CNa slope is 0 at α=0, matching OpenRocket's per-component CNa).
+pub fn cp_breakdown(rocket: &Rocket, fc: FlightConditions) -> Vec<(String, f64, f64)> {
+    let layout = iter_layout(rocket);
+    let d_ref = rocket.max_diameter();
+    let area_ref = PI * 0.25 * d_ref * d_ref;
+    let mut out = Vec::new();
+    if area_ref <= 0.0 {
+        return out;
+    }
+    for (comp, axial_start) in &layout {
+        match comp {
+            Component::NoseCone(n) => {
+                let integ = nose_cone_integrals(n);
+                let (cn_a, cp_local) =
+                    slender_body_cna(0.0, n.aft_radius, n.length, integ.volume, area_ref);
+                out.push((n.common.name.clone(), cn_a, axial_start + cp_local));
+            }
+            Component::Transition(t) => {
+                let integ =
+                    shape_integrals(t.shape, t.shape_parameter, t.length, t.fore_radius, t.aft_radius);
+                let (cn_a, cp_local) = slender_body_cna(
+                    t.fore_radius, t.aft_radius, t.length, integ.volume, area_ref,
+                );
+                out.push((t.common.name.clone(), cn_a, axial_start + cp_local));
+            }
+            Component::FinSet(f) => {
+                let br = local_body_radius(&layout, *axial_start).unwrap_or(0.0);
+                let (cn_a, cp) = fins_cn_alpha(f, br, area_ref, fc.mach);
+                out.push((f.common.name.clone(), cn_a, axial_start + cp));
+            }
+            Component::TubeFinSet(tf) => {
+                let br = local_body_radius(&layout, *axial_start).unwrap_or(0.0);
+                let outer = tf.outer_radius.unwrap_or(br).max(1e-4);
+                let inner = (outer - tf.thickness).max(0.0);
+                let chord = tf.length.max(1e-6);
+                if inner > 1e-5 {
+                    let ar = 2.0 * inner / chord;
+                    let arprime = 2.0 * ar / PI;
+                    let cnaconst =
+                        2.0 * (arprime / (1.0 + arprime)) * PI * PI * inner * chord;
+                    let cna_total = tf.fin_count as f64 * cnaconst / area_ref;
+                    let cpos = tubefin_cp_pos(ar, fc.mach);
+                    out.push((
+                        tf.common.name.clone(),
+                        cna_total,
+                        axial_start + cpos * chord,
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// Compute Barrowman coefficients; `motor_firing` suppresses the base-drag
 /// term (the open motor nozzle pressurises the base annulus).
 pub fn compute_with(
@@ -73,6 +135,9 @@ pub fn compute_with(
     motor_firing: bool,
 ) -> AeroCoefficients {
     let layout = iter_layout(rocket);
+    // Pod/parallel/cluster-replicated walk: a parallel booster's nose &
+    // fins exist once per booster (OpenRocket sums them).
+    let rlayout = iter_layout_reps(rocket);
 
     let d_ref = rocket.max_diameter();
     let area_ref = PI * 0.25 * d_ref * d_ref;
@@ -85,6 +150,9 @@ pub fn compute_with(
     //   CP = Σ (component CN_α · component CP_x) / total CN_α
     let mut cn_total = 0.0_f64;
     let mut cn_x = 0.0_f64;
+    // Fin sets, evaluated in the θ-worst-case sweep below:
+    // (cna1_eff, cp_x_abs, fin_count, base_clock_angle).
+    let mut fin_sets: Vec<(f64, f64, u32, f64)> = Vec::new();
     let mut cd_friction = 0.0_f64;
     let mut cd_pressure = 0.0_f64;
     let cd_base;
@@ -126,17 +194,28 @@ pub fn compute_with(
     let mut lift_cn = 0.0_f64;
     let mut lift_cn_x = 0.0_f64;
 
-    for (comp, axial_start) in &layout {
+    for (comp, axial_start, reps_u) in &rlayout {
+        let reps = *reps_u as f64;
         match comp {
             Component::NoseCone(n) => {
                 let integ = nose_cone_integrals(n);
-                let (cn_a, cp_local) = slender_body_cna(0.0, n.aft_radius, n.length, integ.volume, area_ref);
+                // A flipped nose cone is a tail/boat-tail cone: the profile
+                // goes aft_radius → 0 (area decreasing), giving a *negative*
+                // slender-body CNa, exactly as OpenRocket.
+                let (r0, r1) = if n.is_flipped {
+                    (n.aft_radius, 0.0)
+                } else {
+                    (0.0, n.aft_radius)
+                };
+                let (cn_a0, cp_local) =
+                    slender_body_cna(r0, r1, n.length, integ.volume, area_ref);
+                let cn_a = cn_a0 * reps;
                 cn_total += cn_a;
                 cn_x += cn_a * (axial_start + cp_local);
-                let lift_w = body_lift_weight * integ.planform_area / area_ref;
+                let lift_w = body_lift_weight * integ.planform_area / area_ref * reps;
                 lift_cn += lift_w;
                 lift_cn_x += lift_w * (axial_start + integ.planform_center);
-                body_friction_sum += cf * integ.wet_area / area_ref;
+                body_friction_sum += cf * integ.wet_area / area_ref * reps;
                 if n.aft_radius > max_body_radius { max_body_radius = n.aft_radius; }
                 min_body_x = min_body_x.min(*axial_start);
                 max_body_x = max_body_x.max(axial_start + n.length);
@@ -151,19 +230,20 @@ pub fn compute_with(
                 max_body_x = max_body_x.max(axial_start + t.length);
                 let planform_area = 2.0 * radius * t.length;
                 let planform_center = 0.5 * t.length;
-                let lift_w = body_lift_weight * planform_area / area_ref;
+                let lift_w = body_lift_weight * planform_area / area_ref * reps;
                 lift_cn += lift_w;
                 lift_cn_x += lift_w * (axial_start + planform_center);
             }
             Component::Transition(t) => {
                 let integ = shape_integrals(t.shape, t.shape_parameter, t.length, t.fore_radius, t.aft_radius);
-                let (cn_a, cp_local) = slender_body_cna(t.fore_radius, t.aft_radius, t.length, integ.volume, area_ref);
+                let (cn_a0, cp_local) = slender_body_cna(t.fore_radius, t.aft_radius, t.length, integ.volume, area_ref);
+                let cn_a = cn_a0 * reps;
                 cn_total += cn_a;
                 cn_x += cn_a * (axial_start + cp_local);
-                let lift_w = body_lift_weight * integ.planform_area / area_ref;
+                let lift_w = body_lift_weight * integ.planform_area / area_ref * reps;
                 lift_cn += lift_w;
                 lift_cn_x += lift_w * (axial_start + integ.planform_center);
-                body_friction_sum += cf * integ.wet_area / area_ref;
+                body_friction_sum += cf * integ.wet_area / area_ref * reps;
                 let max_r = t.fore_radius.max(t.aft_radius);
                 if max_r > max_body_radius { max_body_radius = max_r; }
                 min_body_x = min_body_x.min(*axial_start);
@@ -172,9 +252,20 @@ pub fn compute_with(
             }
             Component::FinSet(f) => {
                 let body_radius = local_body_radius(&layout, *axial_start).unwrap_or(0.0);
-                let (cn_a, cp) = fins_cn_alpha(f, body_radius, area_ref, fc.mach);
-                cn_total += cn_a;
-                cn_x += cn_a * (axial_start + cp);
+                // Defer fin CNa to the θ-worst-case sweep (each fin at its
+                // clock angle); store single-fin primitives.
+                let (cna1_eff, cp) =
+                    fin_set_primitives(f, body_radius, area_ref, fc.mach);
+                if cna1_eff > 0.0 {
+                    // A pod/parallel-replicated fin set exists `reps` times
+                    // (each booster) — scale its single-fin CNa accordingly.
+                    fin_sets.push((
+                        cna1_eff * reps,
+                        axial_start + cp,
+                        f.fin_count.max(1),
+                        f.common.angle_offset,
+                    ));
+                }
                 // Fin friction is NOT subject to the body-fineness correction.
                 cd_friction += fin_friction_drag(f, cf, area_ref);
                 cd_pressure += fin_pressure_drag(f, fc.mach, area_ref);
@@ -186,6 +277,34 @@ pub fn compute_with(
                 let n = l.instance_count as f64;
                 cd_pressure += n * tube_internal_pressure_cd(
                     l.outer_radius, l.inner_radius, l.length, fc, area_ref);
+            }
+            Component::TubeFinSet(tf) => {
+                // Faithful port of OpenRocket TubeFinSetCalc: each tube is a
+                // ring airfoil (Ribner 1947 eq.5). CNa per tube =
+                // 2·(arprime/(1+arprime))·π²·rIn·chord / Aref, arprime =
+                // 2·ar/π, ar = 2·rIn/chord; CP = calculateCPPos(M)·chord
+                // from the tube leading edge. BarrowmanCalculator sums over
+                // the tubeCount tubes.
+                let body_radius = local_body_radius(&layout, *axial_start).unwrap_or(0.0);
+                let outer = tf.outer_radius.unwrap_or(body_radius).max(1e-4);
+                let inner = (outer - tf.thickness).max(0.0);
+                let chord = tf.length.max(1e-6);
+                if inner > 1e-5 {
+                    let ar = 2.0 * inner / chord;
+                    let arprime = 2.0 * ar / PI;
+                    let cnaconst =
+                        2.0 * (arprime / (1.0 + arprime)) * PI * PI * inner * chord;
+                    let cna_total =
+                        tf.fin_count as f64 * cnaconst / area_ref * reps;
+                    let cpos = tubefin_cp_pos(ar, fc.mach);
+                    cn_total += cna_total;
+                    cn_x += cna_total * (axial_start + cpos * chord);
+                }
+                // Drag still uses the equivalent-fin approximation (a
+                // separate concern from CP/stability parity).
+                let eqv = tubefin_equiv_finset(tf, body_radius);
+                cd_friction += fin_friction_drag(&eqv, cf, area_ref);
+                cd_pressure += fin_pressure_drag(&eqv, fc.mach, area_ref);
             }
             // Java InternalComponent.isAerodynamic() == false — InnerTube,
             // CenteringRing, MassObject, Parachute, ShockCord do not appear
@@ -215,12 +334,47 @@ pub fn compute_with(
     // contributions via Coordinate.average (weighted by their CN_α / weight
     // values). Total CN at the live AOA = α · (cn_α_slender + lift_weight).
     // CP is then the CN-weighted mix of the two CPs.
-    let total_weight = cn_total + lift_cn;
-    let cp_axial = if total_weight.abs() > 1e-12 {
-        (cn_x + lift_cn_x) / total_weight
+    // OpenRocket getWorstCP: non-fin CN (slender + body lift) is
+    // θ-independent; each fin instance adds cna1_eff·sin²(θ−angleₖ).
+    // Sweep θ over 360 steps and take the most-forward (minimum) CP.
+    let cn0 = cn_total + lift_cn;
+    let cnx0 = cn_x + lift_cn_x;
+    let steps = if fin_sets.is_empty() { 1 } else { 360 };
+    let mut worst_cp = f64::MAX;
+    let mut worst_w = 0.0_f64;
+    for i in 0..steps {
+        let theta = 2.0 * PI * (i as f64) / 360.0;
+        let mut fcna = 0.0;
+        let mut fcnx = 0.0;
+        for &(cna1, cpx, n, base) in &fin_sets {
+            let mut ssin = 0.0;
+            for k in 0..n {
+                let a = base + 2.0 * PI * (k as f64) / (n as f64);
+                let d = (theta - a).sin();
+                ssin += d * d;
+            }
+            let c = cna1 * ssin;
+            fcna += c;
+            fcnx += c * cpx;
+        }
+        let w = cn0 + fcna;
+        if w.abs() > 1e-12 {
+            let cp = (cnx0 + fcnx) / w;
+            if cp < worst_cp {
+                worst_cp = cp;
+                worst_w = w;
+            }
+        }
+    }
+    let total_weight = if worst_w.abs() > 1e-12 { worst_w } else { cn0 };
+    let cp_axial = if worst_cp < f64::MAX {
+        worst_cp
+    } else if cn0.abs() > 1e-12 {
+        cnx0 / cn0
     } else {
         0.0
     };
+    cn_total = total_weight - lift_cn;
     let cn_at_alpha = alpha * total_weight;
     let cd = cd_friction + cd_pressure + cd_base;
     AeroCoefficients {
@@ -602,6 +756,210 @@ fn body_friction_correction(length: f64, max_radius: f64) -> f64 {
 ///
 /// The `(s/D_ref)²` factor already references the result to A_ref = π/4 D²,
 /// so no additional `Af/A_ref` rescaling is needed (and would be incorrect).
+/// Build the equivalent rectangular fin set for a tube-fin set: one flat
+/// fin per tube, chord = tube length, semi-span ≈ tube outer radius.
+/// OpenRocket `TubeFinSetCalc.calculateCPPos`: fractional CP position
+/// along the chord. Subsonic (M≤0.5) = quarter chord; supersonic (M≥2) an
+/// empirical formula; in between a 5th-order interpolation polynomial in M
+/// whose coefficients depend on the aspect ratio.
+fn tubefin_cp_pos(ar: f64, mach: f64) -> f64 {
+    if mach <= 0.5 {
+        return 0.25;
+    }
+    let beta = (mach * mach - 1.0).abs().sqrt();
+    if mach >= 2.0 {
+        return (ar * beta - 0.67) / (2.0 * ar * beta - 1.0);
+    }
+    let denom = (1.0 - 3.4641 * ar).powi(2);
+    let poly = [
+        (9.16049 * (-0.588838 + ar) * (-0.20624 + ar)) / denom,
+        (-31.6049 * (-0.705375 + ar) * (-0.198476 + ar)) / denom,
+        (55.3086 * (-0.711482 + ar) * (-0.196772 + ar)) / denom,
+        (-39.5062 * (-0.72074 + ar) * (-0.194245 + ar)) / denom,
+        (12.8395 * (-0.725688 + ar) * (-0.19292 + ar)) / denom,
+        (-1.58025 * (-0.728769 + ar) * (-0.192105 + ar)) / denom,
+    ];
+    let mut x = 1.0;
+    let mut val = 0.0;
+    for v in poly {
+        val += v * x;
+        x *= mach;
+    }
+    val
+}
+
+fn tubefin_equiv_finset(tf: &TubeFinSet, body_radius: f64) -> FinSet {
+    let r = tf.outer_radius.unwrap_or(body_radius).max(1e-4);
+    let mut common = Common::new("", "tube-fin-equiv");
+    common.material = tf.common.material.clone();
+    FinSet {
+        common,
+        fin_count: tf.fin_count.max(1),
+        root_chord: tf.length,
+        tip_chord: tf.length,
+        sweep_length: 0.0,
+        height: r,
+        thickness: tf.thickness.max(1e-4),
+        cant_angle: 0.0,
+        cross_section: FinCrossSection::Square,
+        shape: FinShape::Trapezoidal,
+        points: Vec::new(),
+        tab_length: 0.0,
+        tab_height: 0.0,
+        fillet_radius: 0.0,
+    }
+}
+
+/// Port of OpenRocket `FinSetCalc.calculateFinGeometry` strip integration
+/// for a freeform fin polygon `pts` (chord-x, span-y), span `s`. Returns
+/// (finArea, macLength, macLead, cosGamma) via 48 spanwise strips: at each
+/// y the polygon's min-x (chordLead) and max-x (chordTrail) define the
+/// local chord; MAC and mid-chord-sweep cosΓ follow exactly as OpenRocket.
+fn freeform_mac(pts: &[[f64; 2]], s: f64) -> (f64, f64, f64, f64) {
+    const DIV: usize = 48;
+    if s <= 0.0 || pts.len() < 3 {
+        return (0.0, 0.0, 0.0, 1.0);
+    }
+    let mut lead = [f64::INFINITY; DIV];
+    let mut trail = [f64::NEG_INFINITY; DIV];
+    let n = pts.len();
+    for k in 0..n {
+        let (x1, y1) = (pts[k][0], pts[k][1]);
+        let (x2, y2) = (pts[(k + 1) % n][0], pts[(k + 1) % n][1]);
+        if (y1 - y2).abs() < 0.001 {
+            continue;
+        }
+        let mut i1 = (y1 * 1.0001 / s * (DIV as f64 - 1.0)) as isize;
+        let mut i2 = (y2 * 1.0001 / s * (DIV as f64 - 1.0)) as isize;
+        i1 = i1.clamp(0, DIV as isize - 1);
+        i2 = i2.clamp(0, DIV as isize - 1);
+        if i1 > i2 {
+            std::mem::swap(&mut i1, &mut i2);
+        }
+        for i in i1..=i2 {
+            let y = i as f64 * s / (DIV as f64 - 1.0);
+            let x = ((y - y2) / (y1 - y2) * x1 + (y1 - y) / (y1 - y2) * x2)
+                .clamp(x1.min(x2), x1.max(x2));
+            if x < lead[i as usize] {
+                lead[i as usize] = x;
+            }
+            if x > trail[i as usize] {
+                trail[i as usize] = x;
+            }
+        }
+    }
+    for i in 0..DIV {
+        if !lead[i].is_finite() || !trail[i].is_finite() {
+            lead[i] = 0.0;
+            trail[i] = 0.0;
+        }
+    }
+    let dy = s / (DIV as f64 - 1.0);
+    let mut mac_len = 0.0;
+    let mut mac_lead = 0.0;
+    let mut area = 0.0;
+    let mut cos_g = 0.0;
+    for i in 0..DIV {
+        let len = (trail[i] - lead[i]).max(0.0);
+        mac_len += len * len;
+        mac_lead += lead[i] * len;
+        area += len;
+        if i > 0 {
+            let dx = (trail[i] + lead[i]) / 2.0 - (trail[i - 1] + lead[i - 1]) / 2.0;
+            let hyp = (dx * dx + dy * dy).sqrt();
+            if hyp != 0.0 {
+                cos_g += dy / hyp;
+            }
+        }
+    }
+    mac_len *= dy;
+    mac_lead *= dy;
+    area *= dy;
+    if area > 1e-12 {
+        mac_len /= area;
+        mac_lead /= area;
+    } else {
+        mac_len = 0.0;
+        mac_lead = 0.0;
+    }
+    cos_g /= DIV as f64 - 1.0;
+    (area, mac_len, mac_lead, cos_g.max(1e-3))
+}
+
+/// OpenRocket FinSetCalc per-*single-fin* primitives: `cna1_eff` =
+/// cna1·(1+τ)·interference (one fin, no Σsin²) and the chordwise CP. The
+/// per-fin `sin²(θ−angleₖ)` and θ-worst-case are applied by the caller
+/// (mirrors BarrowmanCalculator iterating fin instances + getWorstCP).
+fn fin_set_primitives(
+    f: &FinSet,
+    body_radius: f64,
+    area_ref: f64,
+    mach: f64,
+) -> (f64, f64) {
+    use opsrocket_core::component::FinShape;
+    // Span (semi-span) is shape-dependent: trapezoid/elliptical use the
+    // `height` field; a freeform fin's span is the max spanwise point.
+    let s = match f.shape {
+        FinShape::Freeform if f.points.len() >= 3 => f
+            .points
+            .iter()
+            .map(|p| p[1])
+            .fold(0.0_f64, f64::max),
+        _ => f.height,
+    };
+    if s <= 0.0 {
+        return (0.0, 0.0);
+    }
+    // Shape-aware planform area + mid-chord sweep (OpenRocket computes
+    // these from the actual fin geometry, not a trapezoid for every type).
+    let (fin_area, cos_gamma, cp) = match f.shape {
+        FinShape::Elliptical => {
+            // Quarter-ellipse-ish: A = (π/4)·c·h; effectively unswept
+            // mid-chord; CP at ≈0.4244·rootChord (ellipse MAC centroid).
+            let a = std::f64::consts::PI * 0.25 * f.root_chord * s;
+            (a, 1.0, 0.4244 * f.root_chord)
+        }
+        FinShape::Freeform if f.points.len() >= 3 => {
+            // Exact OpenRocket FinSetCalc strip integration over the fin
+            // polygon (48 spanwise strips): finArea, macLength, macLead,
+            // cosGamma; CP = macLead + 0.25·macLength (subsonic).
+            let (a, mac_len, mac_lead, cg) = freeform_mac(&f.points, s);
+            (a, cg, mac_lead + 0.25 * mac_len)
+        }
+        _ => {
+            let a = 0.5 * (f.root_chord + f.tip_chord) * s;
+            let mid_sweep =
+                (f.sweep_length + 0.5 * (f.tip_chord - f.root_chord)).atan2(s);
+            let m = f.sweep_length;
+            let cr = f.root_chord;
+            let ct = f.tip_chord;
+            let cpx = m * (cr + 2.0 * ct) / (3.0 * (cr + ct))
+                + (1.0 / 6.0) * (cr + ct - cr * ct / (cr + ct));
+            (a, mid_sweep.cos().max(1e-3), cpx)
+        }
+    };
+    if fin_area <= 0.0 {
+        return (0.0, 0.0);
+    }
+    let m_eff = mach.min(0.9);
+    let inner = pow2(s * s / (fin_area.max(1e-12) * cos_gamma));
+    let denom = 1.0 + (1.0 + (1.0 - m_eff * m_eff) * inner).sqrt();
+    let cna1 = 2.0 * PI * s * s / denom / area_ref;
+    let tau = body_radius / (s + body_radius).max(1e-9);
+    // FinSetCalc fin-fin interference (by interferenceFinCount; approximated
+    // with this set's fin count — exact for isolated sets).
+    let interf = match f.fin_count {
+        1..=4 => 1.0,
+        5 => 0.948,
+        6 => 0.913,
+        7 => 0.854,
+        8 => 0.81,
+        _ => 0.75,
+    };
+    let cna1_eff = cna1 * (1.0 + tau) * interf;
+    (cna1_eff, cp)
+}
+
 fn fins_cn_alpha(f: &FinSet, body_radius: f64, area_ref: f64, mach: f64) -> (f64, f64) {
     let s = f.height;
     if s <= 0.0 || f.root_chord + f.tip_chord <= 0.0 {
@@ -744,6 +1102,157 @@ fn fin_pressure_drag(f: &FinSet, mach: f64, area_ref: f64) -> f64 {
         * f.thickness
         / area_ref;
     f.fin_count as f64 * (cd_le + cd_base_per_fin)
+}
+
+/// One row of OpenRocket's "Component Analysis" table: how much each
+/// aerodynamic component contributes to normal force, CP, and drag.
+#[derive(Debug, Clone, Default)]
+pub struct ComponentAero {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub cn_alpha: f64,
+    pub cp_axial: f64,
+    pub cd_friction: f64,
+    pub cd_pressure: f64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct AnalysisReport {
+    pub components: Vec<ComponentAero>,
+    pub cd_base: f64,
+    pub cn_alpha_total: f64,
+    pub cp_axial: f64,
+    pub cd_total: f64,
+    pub reference_length: f64,
+}
+
+/// Per-component aerodynamic breakdown. Mirrors [`compute_with`]'s
+/// accumulation exactly but attributes each term to its component, so the
+/// totals here equal the aggregate `compute_with` returns (base drag is a
+/// rocket-level term, reported separately).
+pub fn component_analysis(rocket: &Rocket, fc: FlightConditions) -> AnalysisReport {
+    let layout = iter_layout(rocket);
+    let d_ref = rocket.max_diameter();
+    let area_ref = PI * 0.25 * d_ref * d_ref;
+    let mut report = AnalysisReport { reference_length: d_ref, ..Default::default() };
+    if area_ref <= 0.0 {
+        return report;
+    }
+
+    let body_length = rocket.total_length().max(1e-3);
+    let reynolds_full = (fc.reynolds * body_length).max(1.0);
+    let cf = friction_coefficient(reynolds_full, fc.mach)
+        .max(roughness_limited_cf(body_length, fc.mach));
+
+    // Body-friction correction depends on overall fineness; compute it once
+    // and apply the same multiplier to every body component (Java does the
+    // same — it scales the summed body friction).
+    let mut max_body_radius = 0.0_f64;
+    let mut min_x = f64::INFINITY;
+    let mut max_x = 0.0_f64;
+    for (comp, ax) in &layout {
+        match comp {
+            Component::NoseCone(n) => {
+                max_body_radius = max_body_radius.max(n.aft_radius);
+                min_x = min_x.min(*ax);
+                max_x = max_x.max(ax + n.length);
+            }
+            Component::BodyTube(t) => {
+                max_body_radius = max_body_radius.max(t.radius.unwrap_or(0.0));
+                min_x = min_x.min(*ax);
+                max_x = max_x.max(ax + t.length);
+            }
+            Component::Transition(t) => {
+                max_body_radius = max_body_radius.max(t.fore_radius.max(t.aft_radius));
+                min_x = min_x.min(*ax);
+                max_x = max_x.max(ax + t.length);
+            }
+            _ => {}
+        }
+    }
+    let body_corr = if max_body_radius > 0.0 && max_x > min_x {
+        body_friction_correction(max_x - min_x, max_body_radius)
+    } else {
+        1.0
+    };
+
+    let mut cn_total = 0.0_f64;
+    let mut cn_x = 0.0_f64;
+    for (comp, axial_start) in &layout {
+        let common = comp.common();
+        let mut row = ComponentAero {
+            id: common.id.0.clone(),
+            name: common.name.clone(),
+            ..Default::default()
+        };
+        match comp {
+            Component::NoseCone(n) => {
+                row.kind = "NoseCone".into();
+                let integ = nose_cone_integrals(n);
+                let (cn_a, cp_local) =
+                    slender_body_cna(0.0, n.aft_radius, n.length, integ.volume, area_ref);
+                cn_total += cn_a;
+                cn_x += cn_a * (axial_start + cp_local);
+                row.cn_alpha = cn_a;
+                row.cp_axial = axial_start + cp_local;
+                row.cd_friction = cf * integ.wet_area / area_ref * body_corr;
+                row.cd_pressure =
+                    nose_pressure_drag(n.shape, n.shape_parameter, n.length, n.aft_radius, fc.mach);
+            }
+            Component::BodyTube(t) => {
+                row.kind = "BodyTube".into();
+                let radius = t.radius.unwrap_or(0.0);
+                row.cd_friction = cf * (2.0 * PI * radius * t.length) / area_ref * body_corr;
+            }
+            Component::Transition(t) => {
+                row.kind = "Transition".into();
+                let integ = shape_integrals(
+                    t.shape, t.shape_parameter, t.length, t.fore_radius, t.aft_radius,
+                );
+                let (cn_a, cp_local) = slender_body_cna(
+                    t.fore_radius, t.aft_radius, t.length, integ.volume, area_ref,
+                );
+                cn_total += cn_a;
+                cn_x += cn_a * (axial_start + cp_local);
+                row.cn_alpha = cn_a;
+                row.cp_axial = axial_start + cp_local;
+                row.cd_friction = cf * integ.wet_area / area_ref * body_corr;
+                row.cd_pressure = transition_pressure_drag(t, fc.mach, area_ref);
+            }
+            Component::FinSet(f) => {
+                row.kind = "FinSet".into();
+                let body_radius = local_body_radius(&layout, *axial_start).unwrap_or(0.0);
+                let (cn_a, cp) = fins_cn_alpha(f, body_radius, area_ref, fc.mach);
+                cn_total += cn_a;
+                cn_x += cn_a * (axial_start + cp);
+                row.cn_alpha = cn_a;
+                row.cp_axial = axial_start + cp;
+                row.cd_friction = fin_friction_drag(f, cf, area_ref);
+                row.cd_pressure = fin_pressure_drag(f, fc.mach, area_ref);
+            }
+            Component::LaunchLug(l) => {
+                row.kind = "LaunchLug".into();
+                row.cd_pressure = l.instance_count as f64
+                    * tube_internal_pressure_cd(
+                        l.outer_radius, l.inner_radius, l.length, fc, area_ref,
+                    );
+            }
+            _ => continue,
+        }
+        report.components.push(row);
+    }
+
+    report.cd_base = base_drag(fc.mach);
+    report.cn_alpha_total = cn_total;
+    report.cp_axial = if cn_total.abs() > 1e-12 { cn_x / cn_total } else { 0.0 };
+    report.cd_total = report
+        .components
+        .iter()
+        .map(|c| c.cd_friction + c.cd_pressure)
+        .sum::<f64>()
+        + report.cd_base;
+    report
 }
 
 #[cfg(test)]

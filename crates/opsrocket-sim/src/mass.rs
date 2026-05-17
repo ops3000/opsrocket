@@ -50,15 +50,29 @@ pub fn mass_properties_for_stages(rocket: &Rocket, active: &[bool]) -> MassPrope
         let include = active.get(i).copied().unwrap_or(true);
         let layout = layout_children(&stage.children, origin, prev_aft);
         if include {
-            for (comp, layout) in &layout {
-                accumulate(&mut acc, comp, layout.axial_start);
-                if let Component::BodyTube(t) = comp {
-                    let body_start = layout.axial_start;
-                    let body_end = body_start + t.length;
-                    for (sub, sub_layout) in layout_children(&t.children, body_start, body_end) {
-                        accumulate(&mut acc, sub, sub_layout.axial_start);
+            // Stage-level mass override with overridesubcomponentsmass:
+            // the whole stage subtree weighs exactly mass_override, placed
+            // at cg_override or the subtree's computed centroid.
+            if stage.common.override_subcomponents_mass {
+                if let Some(m) = stage.common.mass_override {
+                    let mut sub = Accumulator::default();
+                    for (comp, l) in &layout {
+                        accumulate_rec(&mut sub, comp, l.axial_start);
                     }
+                    let cg = stage
+                        .common
+                        .cg_override
+                        .unwrap_or_else(|| sub.finish().cg_axial);
+                    acc.add(m, cg, 0.0, 0.0);
+                    if let Some(last) = layout_aft(&stage.children, origin) {
+                        origin = last;
+                        prev_aft = last;
+                    }
+                    continue;
                 }
+            }
+            for (comp, layout) in &layout {
+                accumulate_rec(&mut acc, comp, layout.axial_start);
             }
         }
         if let Some(last) = layout_aft(&stage.children, origin) {
@@ -75,37 +89,108 @@ pub fn mass_properties_for_stages(rocket: &Rocket, active: &[bool]) -> MassPrope
 pub fn resolve_auto_dimensions(rocket: &Rocket) -> Rocket {
     let mut r = rocket.clone();
     for stage in &mut r.stages {
-        for child in &mut stage.children {
-            if let Component::BodyTube(tube) = child {
-                let tube_inner = tube.radius.map(|outer| (outer - tube.thickness).max(0.0));
-                // Find the first inner tube to provide a reference inner-radius.
-                let inner_outer = tube
-                    .children
-                    .iter()
-                    .find_map(|c| if let Component::InnerTube(it) = c { Some(it.outer_radius) } else { None });
-                for sub in &mut tube.children {
-                    match sub {
-                        Component::CenteringRing(cr) => {
-                            if cr.outer_radius == 0.0 {
-                                if let Some(t) = tube_inner { cr.outer_radius = t; }
-                            }
-                            if cr.inner_radius == 0.0 {
-                                if let Some(io) = inner_outer { cr.inner_radius = io; }
-                            }
-                        }
-                        Component::LaunchLug(lug) => {
-                            if lug.inner_radius == 0.0 || lug.inner_radius >= lug.outer_radius {
-                                // Fall back to a 0.5 mm wall if the file doesn't specify one.
-                                lug.inner_radius = (lug.outer_radius - 0.0005).max(0.0);
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
+        resolve_children(&mut stage.children, 0.0, None, None);
     }
     r
+}
+
+/// Recursively resolve auto/derived dimensions over the whole tree, so a
+/// ring/coupler nested at any depth (stage, nose, body, inner tube, pod,
+/// coupler) gets its bore set. `parent_inner` = enclosing tube interior
+/// radius (for auto outer), `parent_outer` = enclosing airframe radius
+/// (for auto tube-fin radius).
+fn resolve_children(
+    children: &mut [Component],
+    parent_inner: f64,
+    parent_outer: Option<f64>,
+    inner_outer: Option<f64>,
+) {
+    // A plain centering ring's bore = the motor-mount inner tube it
+    // surrounds (a sibling). Compute once before the mutable walk.
+    let sib_inner_outer = children
+        .iter()
+        .find_map(|c| {
+            if let Component::InnerTube(it) = c {
+                Some(it.outer_radius)
+            } else {
+                None
+            }
+        })
+        .or(inner_outer);
+    for sub in children {
+        match sub {
+            Component::BodyTube(t) => {
+                let ti = t
+                    .radius
+                    .map(|o| (o - t.thickness).max(0.0))
+                    .unwrap_or(parent_inner);
+                resolve_children(&mut t.children, ti, t.radius, None);
+            }
+            Component::InnerTube(it) => {
+                let ii = it.inner_radius;
+                resolve_children(&mut it.children, ii, Some(it.outer_radius), None);
+            }
+            Component::NoseCone(n) => {
+                let ni = (n.aft_radius - n.thickness).max(0.0);
+                resolve_children(&mut n.children, ni, Some(n.aft_radius), None);
+            }
+            Component::Transition(tr) => {
+                let ro = tr.fore_radius.max(tr.aft_radius);
+                resolve_children(
+                    &mut tr.children,
+                    (ro - tr.thickness).max(0.0),
+                    Some(ro),
+                    None,
+                );
+            }
+            Component::PodSet(p) => {
+                resolve_children(&mut p.children, parent_inner, parent_outer, None);
+            }
+            Component::CenteringRing(cr) => {
+                // resolve_ring also recurses cr.children vs its interior.
+                resolve_ring(cr, parent_inner, sib_inner_outer);
+            }
+            Component::LaunchLug(lug) => {
+                if lug.inner_radius == 0.0 || lug.inner_radius >= lug.outer_radius {
+                    lug.inner_radius = (lug.outer_radius - 0.0005).max(0.0);
+                }
+            }
+            Component::TubeFinSet(tf) => {
+                if tf.outer_radius.is_none() {
+                    tf.outer_radius = parent_outer;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Resolve a thickness-ring part (centering ring / engine block / tube
+/// coupler / bulkhead): auto outer = parent interior radius; solid →
+/// inner 0; wall thickness → inner = outer − thickness; otherwise fall
+/// back to the motor-mount tube's outer radius. Recurses a coupler's
+/// nested rings/bulkheads against the coupler's interior.
+fn resolve_ring(cr: &mut CenteringRing, parent_inner: f64, inner_outer: Option<f64>) {
+    if cr.outer_radius == 0.0 {
+        cr.outer_radius = parent_inner;
+    }
+    if cr.solid {
+        cr.inner_radius = 0.0;
+    } else if cr.thickness_set {
+        // Wall thickness given (engine block, tube coupler). A zero
+        // thickness ⇒ zero-wall tube ⇒ inner = outer ⇒ no mass.
+        cr.inner_radius = (cr.outer_radius - cr.thickness).max(0.0);
+    } else if cr.inner_radius == 0.0 {
+        if let Some(io) = inner_outer {
+            cr.inner_radius = io;
+        }
+    }
+    let interior = cr.inner_radius;
+    for ch in &mut cr.children {
+        if let Component::CenteringRing(inner) = ch {
+            resolve_ring(inner, interior, None);
+        }
+    }
 }
 
 struct ChildLayout {
@@ -199,6 +284,75 @@ impl Accumulator {
     }
 }
 
+/// Accumulate a component and recurse the structural children OpenRocket
+/// nests inside body tubes and motor-mount inner tubes (engine block,
+/// centering rings, …). PodSet recursion stays inside `accumulate`.
+fn accumulate_rec(acc: &mut Accumulator, comp: &Component, axial_start: f64) {
+    accumulate_rec_n(acc, comp, axial_start, 1);
+}
+
+/// `reps` = how many physical copies of this subtree exist (inner-tube
+/// clustering replicates the whole motor-mount assembly). Cluster is a
+/// radial arrangement, so mass + axial CG are simply ×reps at the same x.
+fn accumulate_rec_n(acc: &mut Accumulator, comp: &Component, axial_start: f64, reps: u32) {
+    // Component-level assembly mass override: the whole subtree weighs
+    // exactly mass_override (× reps), at cg_override or the subtree CG;
+    // children are not walked.
+    let cm = comp.common();
+    if cm.override_subcomponents_mass {
+        if let Some(m) = cm.mass_override {
+            let mut sub = Accumulator::default();
+            accumulate(&mut sub, comp, axial_start);
+            let (children, len): (&[Component], f64) = match comp {
+                Component::BodyTube(t) => (&t.children, t.length),
+                Component::InnerTube(it) => (&it.children, it.length),
+                Component::CenteringRing(c) => (&c.children, c.length),
+                Component::NoseCone(n) => (&n.children, n.length),
+                Component::Transition(t) => (&t.children, t.length),
+                Component::PodSet(p) => (&p.children, 0.0),
+                _ => (&[], 0.0),
+            };
+            for (s, sl) in layout_children(children, axial_start, axial_start + len) {
+                accumulate_rec(&mut sub, s, sl.axial_start);
+            }
+            let cg = cm.cg_override.unwrap_or_else(|| sub.finish().cg_axial);
+            for _ in 0..reps.max(1) {
+                acc.add(m, cg, 0.0, 0.0);
+            }
+            return;
+        }
+    }
+    let self_reps = match comp {
+        Component::InnerTube(it) => reps * it.cluster_count.max(1),
+        _ => reps,
+    };
+    for _ in 0..self_reps.max(1) {
+        accumulate(acc, comp, axial_start);
+    }
+    let (children, len, child_reps): (&[Component], f64, u32) = match comp {
+        Component::BodyTube(t) => (&t.children, t.length, self_reps),
+        Component::InnerTube(it) => (&it.children, it.length, self_reps),
+        Component::CenteringRing(c) => (&c.children, c.length, self_reps),
+        Component::NoseCone(n) => (&n.children, n.length, self_reps),
+        Component::Transition(t) => (&t.children, t.length, self_reps),
+        // A pod / parallel stage carries no structural mass itself; its
+        // children are replicated `instance_count` times (× any outer
+        // cluster reps).
+        Component::PodSet(p) => (
+            &p.children,
+            0.0,
+            self_reps * p.instance_count.max(1),
+        ),
+        _ => return,
+    };
+    if children.is_empty() {
+        return;
+    }
+    for (sub, sl) in layout_children(children, axial_start, axial_start + len) {
+        accumulate_rec_n(acc, sub, sl.axial_start, child_reps);
+    }
+}
+
 fn accumulate(acc: &mut Accumulator, comp: &Component, axial_start: f64) {
     match comp {
         Component::NoseCone(n) => add_nosecone(acc, n, axial_start),
@@ -215,8 +369,27 @@ fn accumulate(acc: &mut Accumulator, comp: &Component, axial_start: f64) {
             acc.add(mass, cg, i_long, i_rot_local);
         }
         Component::FinSet(fs) => {
+            // OpenRocket FinSet.CrossSection relative volume: SQUARE 1.00,
+            // ROUNDED 0.99, AIRFOIL 0.85 (a slab-volume correction).
+            let xsec = match fs.cross_section {
+                opsrocket_core::component::FinCrossSection::Square => 1.00,
+                opsrocket_core::component::FinCrossSection::Rounded => 0.99,
+                opsrocket_core::component::FinCrossSection::Airfoil => 0.85,
+            };
             let mass_each = if let Some(mat) = fs.common.material.as_ref() {
-                fs.thickness * fin_area(fs) * mat.density
+                // OpenRocket FinSet.calculateCM: wetted (planform·t·relVol)
+                // + root tab (tabL·tabH·t) + root fillet, ×density.
+                let wetted = fin_area(fs) * fs.thickness * xsec;
+                let tab = fs.tab_length * fs.tab_height * fs.thickness;
+                let fillet = if fs.fillet_radius > 0.0 {
+                    // Two concave fillets along the root chord; per-side
+                    // cross-section r²(1−π/4).
+                    let r = fs.fillet_radius;
+                    2.0 * r * r * (1.0 - std::f64::consts::PI / 4.0) * fs.root_chord
+                } else {
+                    0.0
+                };
+                (wetted + tab + fillet) * mat.density
             } else {
                 0.0
             };
@@ -260,6 +433,25 @@ fn accumulate(acc: &mut Accumulator, comp: &Component, axial_start: f64) {
         Component::ShockCord(s) => add_shockcord(acc, s, axial_start),
         Component::LaunchLug(l) => add_launchlug(acc, l, axial_start),
         Component::CenteringRing(c) => add_centering_ring(acc, c, axial_start),
+        Component::PodSet(_) => {
+            // No structural mass of its own; children are walked (×
+            // instance_count) by accumulate_rec_n with proper layout.
+        }
+        Component::TubeFinSet(tf) => {
+            // Each tube fin is a thin cylindrical shell: m = ρ·(2πr·L)·t.
+            let r = tf.outer_radius.unwrap_or(0.0).max(1e-4);
+            let mass_each = if let Some(mat) = tf.common.material.as_ref() {
+                mat.density * (2.0 * PI * r * tf.length) * tf.thickness
+            } else {
+                0.0
+            };
+            let total = override_mass(&tf.common, mass_each * tf.fin_count as f64);
+            let cg = override_cg(&tf.common, axial_start + 0.5 * tf.length);
+            // Tubes ride ~2r off the axis; crude transverse/longitudinal MoI.
+            let i_long = total * pow2(2.0 * r);
+            let i_rot_local = total * pow2(0.5 * tf.length);
+            acc.add(total, cg, i_long, i_rot_local);
+        }
     }
 }
 
@@ -319,23 +511,19 @@ fn add_centering_ring(acc: &mut Accumulator, c: &CenteringRing, axial_start: f64
 fn add_nosecone(acc: &mut Accumulator, n: &NoseCone, axial_start: f64) {
     // Main shell mass.
     let (shell_mass, shell_cg) = if let Some(mat) = n.common.material.as_ref() {
-        // Use the shape-aware integrated wet area instead of the simple
-        // slant approximation; for ogive / Haack / power shapes the
-        // curvature gives a meaningfully larger wetted area than the
-        // frustum slant.  Volume CG comes from the same integral.
-        let integ = opsrocket_core::profile::shape_integrals(
+        // Exact OpenRocket hollow-shell volume (frustum-difference, 128
+        // divisions, normal-offset wall) — not wet_area·thickness, which
+        // over-estimates curved cones by ~10%.
+        let (vol, cg) = opsrocket_core::profile::shell_volume_cg(
             n.shape,
             n.shape_parameter,
             n.length,
             0.0,
             n.aft_radius,
+            n.thickness,
+            n.filled,
         );
-        let m = integ.wet_area * n.thickness * mat.density;
-        // For a thin shell, CG of the shell ≈ CG of the surface, not the
-        // filled volume. We use the volume-weighted CG (computed by
-        // shape_integrals) as a close approximation — the difference is
-        // typically < 1% of L for typical nose-cone shapes.
-        (m, axial_start + integ.cg_axial)
+        (vol * mat.density, axial_start + cg)
     } else {
         (0.0, axial_start + 0.5 * n.length)
     };
@@ -414,20 +602,23 @@ fn add_transition(
     t: &opsrocket_core::component::Transition,
     axial_start: f64,
 ) {
-    let mass = override_mass(
-        &t.common,
-        if let Some(mat) = t.common.material.as_ref() {
-            // Approximate as the frustum-shell area.
-            let r1 = t.fore_radius;
-            let r2 = t.aft_radius;
-            let slant = ((r2 - r1).powi(2) + t.length * t.length).sqrt();
-            let area = PI * (r1 + r2) * slant;
-            area * t.thickness * mat.density
-        } else {
-            0.0
-        },
-    );
-    let cg = override_cg(&t.common, axial_start + 0.5 * t.length);
+    let (computed_mass, computed_cg) = if let Some(mat) = t.common.material.as_ref() {
+        // Exact OpenRocket hollow-shell integration (frustum-difference).
+        let (vol, cg) = opsrocket_core::profile::shell_volume_cg(
+            t.shape,
+            t.shape_parameter,
+            t.length,
+            t.fore_radius,
+            t.aft_radius,
+            t.thickness,
+            t.filled,
+        );
+        (vol * mat.density, axial_start + cg)
+    } else {
+        (0.0, axial_start + 0.5 * t.length)
+    };
+    let mass = override_mass(&t.common, computed_mass);
+    let cg = override_cg(&t.common, computed_cg);
     let r_eff = 0.5 * (t.fore_radius + t.aft_radius);
     let i_long = 0.5 * mass * r_eff * r_eff;
     let i_rot_local = mass * (3.0 * r_eff * r_eff + t.length * t.length) / 12.0;
@@ -454,8 +645,26 @@ fn add_innertube(acc: &mut Accumulator, it: &opsrocket_core::component::InnerTub
 }
 
 fn fin_area(fs: &opsrocket_core::component::FinSet) -> f64 {
-    // Trapezoid area: ((root + tip) / 2) * height
-    0.5 * (fs.root_chord + fs.tip_chord) * fs.height
+    use opsrocket_core::component::FinShape;
+    match fs.shape {
+        // Quarter-ellipse-ish OpenRocket elliptical fin: planform =
+        // (π/4)·rootChord·height.
+        FinShape::Elliptical => {
+            std::f64::consts::PI * 0.25 * fs.root_chord * fs.height
+        }
+        // Freeform: shoelace area of the (chord,height) outline polygon.
+        FinShape::Freeform if fs.points.len() >= 3 => {
+            let p = &fs.points;
+            let mut a = 0.0;
+            for i in 0..p.len() {
+                let j = (i + 1) % p.len();
+                a += p[i][0] * p[j][1] - p[j][0] * p[i][1];
+            }
+            a.abs() * 0.5
+        }
+        // Trapezoid: ((root + tip) / 2) · height.
+        _ => 0.5 * (fs.root_chord + fs.tip_chord) * fs.height,
+    }
 }
 
 fn override_mass(c: &Common, computed: f64) -> f64 {
@@ -475,6 +684,75 @@ pub fn single_component_mass(c: &Component) -> f64 {
     acc.finish().mass
 }
 
+/// Recursively collect (component, axial_start) descending the same
+/// structural children as the mass walk (body tube + inner tube).
+fn collect_layout<'a>(
+    c: &'a Component,
+    start: f64,
+    out: &mut Vec<(&'a Component, f64)>,
+) {
+    out.push((c, start));
+    let (children, len): (&[Component], f64) = match c {
+        Component::BodyTube(t) => (&t.children, t.length),
+        Component::InnerTube(it) => (&it.children, it.length),
+        Component::CenteringRing(cr) => (&cr.children, cr.length),
+        Component::NoseCone(n) => (&n.children, n.length),
+        Component::Transition(t) => (&t.children, t.length),
+        Component::PodSet(p) => (&p.children, 0.0),
+        _ => return,
+    };
+    for (sc, sl) in layout_children(children, start, start + len) {
+        collect_layout(sc, sl.axial_start, out);
+    }
+}
+
+/// Like `collect_layout` but also carries `reps` — the physical-copy
+/// multiplier from pod/parallel-stage `instance_count` (and inner-tube
+/// `cluster_count`) along the path. Aerodynamics needs this so a parallel
+/// booster's nose/fins count once per booster (OpenRocket sums them).
+fn collect_layout_reps<'a>(
+    c: &'a Component,
+    start: f64,
+    reps: u32,
+    out: &mut Vec<(&'a Component, f64, u32)>,
+) {
+    out.push((c, start, reps));
+    let (children, len, child_reps): (&[Component], f64, u32) = match c {
+        Component::BodyTube(t) => (&t.children, t.length, reps),
+        Component::InnerTube(it) => {
+            (&it.children, it.length, reps * it.cluster_count.max(1))
+        }
+        Component::CenteringRing(cr) => (&cr.children, cr.length, reps),
+        Component::NoseCone(n) => (&n.children, n.length, reps),
+        Component::Transition(t) => (&t.children, t.length, reps),
+        Component::PodSet(p) => {
+            (&p.children, 0.0, reps * p.instance_count.max(1))
+        }
+        _ => return,
+    };
+    for (sc, sl) in layout_children(children, start, start + len) {
+        collect_layout_reps(sc, sl.axial_start, child_reps, out);
+    }
+}
+
+/// `iter_layout` with the pod/parallel/cluster replication multiplier.
+pub fn iter_layout_reps<'a>(rocket: &'a Rocket) -> Vec<(&'a Component, f64, u32)> {
+    let mut out = Vec::new();
+    let mut origin = 0.0;
+    let mut prev_aft = 0.0;
+    for stage in &rocket.stages {
+        let layout = layout_children(&stage.children, origin, prev_aft);
+        for (c, l) in &layout {
+            collect_layout_reps(c, l.axial_start, 1, &mut out);
+        }
+        if let Some(last) = layout_aft(&stage.children, origin) {
+            origin = last;
+            prev_aft = last;
+        }
+    }
+    out
+}
+
 /// Walk through all stages and yield each component plus its axial start position.
 pub fn iter_layout<'a>(rocket: &'a Rocket) -> Vec<(&'a Component, f64)> {
     let mut out = Vec::new();
@@ -483,14 +761,7 @@ pub fn iter_layout<'a>(rocket: &'a Rocket) -> Vec<(&'a Component, f64)> {
     for stage in &rocket.stages {
         let layout = layout_children(&stage.children, origin, prev_aft);
         for (c, l) in &layout {
-            out.push((*c, l.axial_start));
-            if let Component::BodyTube(t) = c {
-                let body_start = l.axial_start;
-                let body_end = body_start + t.length;
-                for (sc, sl) in layout_children(&t.children, body_start, body_end) {
-                    out.push((sc, sl.axial_start));
-                }
-            }
+            collect_layout(c, l.axial_start, &mut out);
         }
         if let Some(last) = layout_aft(&stage.children, origin) {
             origin = last;

@@ -7,12 +7,34 @@
 //! implementation caches conditions at 500 m intervals and linearly
 //! interpolates between them; we do the same so behaviour matches exactly.
 
-use crate::units::{G0, GAMMA_AIR};
+use crate::units::G0;
 
 // Java constants (kept module-local to make the source-of-truth obvious).
+// `AtmosphericConditions.R` (dry-air gas constant) / `EPSILON`.
 const R_AIR: f64 = 287.053;
+const EPSILON: f64 = 0.622;
 const ISA_EARTH_RADIUS: f64 = 6_356_766.0;
 const DELTA_M: f64 = 500.0;
+
+/// `AtmosphericConditions.vaporPressureSaturation()` —
+/// `611.3 * exp(19.854 - 5423/T)`.
+fn vapor_pressure_saturation(t: f64) -> f64 {
+    611.3 * (19.854 - 5423.0 / t).exp()
+}
+
+/// `AtmosphericConditions.getGasConstant()` — humid-air gas constant.
+/// Returns the dry-air `R` when relative humidity is 0 (the default).
+fn gas_constant(pressure: f64, temperature: f64, relative_humidity: f64) -> f64 {
+    if relative_humidity > 0.0 {
+        let es = vapor_pressure_saturation(temperature);
+        let numerator = EPSILON * relative_humidity * es;
+        let denominator = pressure - relative_humidity * es * (1.0 - EPSILON);
+        let scaling_factor = 1.0 / EPSILON - 1.0;
+        R_AIR * (1.0 + numerator * scaling_factor / denominator)
+    } else {
+        R_AIR
+    }
+}
 
 /// Atmospheric conditions at a single point.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -35,13 +57,26 @@ impl AtmosphericConditions {
     }
 
     /// Build derived quantities (density, speed of sound, viscosity) from
-    /// temperature and pressure using the ideal-gas relation and
-    /// Sutherland's formula for viscosity.
-    pub fn from_t_p(temperature: f64, pressure: f64) -> Self {
-        let density = pressure / (R_AIR * temperature);
-        let speed_of_sound = (GAMMA_AIR * R_AIR * temperature).sqrt();
-        let viscosity = sutherland_viscosity(temperature);
+    /// temperature, pressure and relative humidity, matching OpenRocket's
+    /// `AtmosphericConditions`:
+    /// - density   = `P / (R_gas · T)`, `R_gas` humidity-corrected
+    /// - speed of sound = `165.77 + 0.606·T`  (`getMachSpeed`)
+    /// - `viscosity` field stores OpenRocket's *dynamic* viscosity
+    ///   `μ = 3.7291e-6 + 4.9944e-8·T`.  OpenRocket's kinematic viscosity is
+    ///   `ν = μ/ρ` and `Re = v·L/ν = ρ·v·L/μ`; the engine computes
+    ///   `Re/L = ρ·v/μ`, so storing the linear `μ` here makes the Reynolds
+    ///   number bit-match `BarrowmanDragCalculator.calculateReynoldsNumber`.
+    pub fn from_t_p_rh(temperature: f64, pressure: f64, relative_humidity: f64) -> Self {
+        let r_gas = gas_constant(pressure, temperature, relative_humidity);
+        let density = pressure / (r_gas * temperature);
+        let speed_of_sound = 165.77 + 0.606 * temperature;
+        let viscosity = 3.729_1e-6 + 4.994_4e-8 * temperature;
         Self { temperature, pressure, density, speed_of_sound, viscosity }
+    }
+
+    /// Convenience for the dry-air (RH = 0) case, OpenRocket's default.
+    pub fn from_t_p(temperature: f64, pressure: f64) -> Self {
+        Self::from_t_p_rh(temperature, pressure, 0.0)
     }
 }
 
@@ -57,11 +92,22 @@ const STANDARD_TEMPERATURES_K: [f64; 8] = [
     288.15, 216.65, 216.65, 228.65, 270.65, 270.65, 214.65, 186.95,
 ];
 
-/// Extended ISA model with eight layers and a pre-baked 500 m grid.
+/// Extended ISA model — a faithful port of OpenRocket's
+/// `ExtendedISAModel(altitude, temperature, pressure, relativeHumidity)`
+/// constructor (with the `altitude > 0` custom-layer insertion) plus the
+/// `InterpolatingAtmosphericModel` 500 m grid cache that wraps it.
 #[derive(Debug, Clone)]
 pub struct ExtendedIsa {
     pub t0: f64,
     pub p0: f64,
+    /// Relative humidity at MSL (OpenRocket default `STANDARD_RELATIVE_HUMIDITY
+    /// = 0`).  Held constant with altitude — this is exactly OpenRocket's
+    /// behaviour: its `calculateRelativeHumidity()` is a TODO identity that
+    /// returns the source humidity unchanged for every layer.
+    pub rh0: f64,
+    /// Geopotential layer bases (length 8, or 9 when a launch-site layer is
+    /// inserted at index 1 — mirrors OpenRocket's `layer[]`).
+    layer: Vec<f64>,
     base_temperature: Vec<f64>,
     base_pressure: Vec<f64>,
     grid: Vec<AtmosphericConditions>,
@@ -74,34 +120,98 @@ impl Default for ExtendedIsa {
 }
 
 impl ExtendedIsa {
+    /// MSL ISA base with the given sea-level T/P, dry air. Equivalent to
+    /// OpenRocket `new ExtendedISAModel(0, t0, p0, 0)`.
     pub fn new(t0: f64, p0: f64) -> Self {
-        let n = STANDARD_LAYERS_M.len();
-        let mut base_temperature = STANDARD_TEMPERATURES_K.to_vec();
-        base_temperature[0] = t0;
-        let mut base_pressure = vec![0.0; n];
-        base_pressure[0] = p0;
-        for i in 1..n {
-            let alt1 = STANDARD_LAYERS_M[i - 1];
-            let alt2 = STANDARD_LAYERS_M[i];
-            let t1 = base_temperature[i - 1];
-            let t2 = base_temperature[i];
-            // ExtendedISAModel.calculatePressure(alt1=top, temp1=temp_top,
-            //   alt2=base, temp2=temp_base, press2=press_base):
-            //   tempRate = (temp_base - temp_top) / (alt_base - alt_top)
-            //   if |tempRate| > 1e-6:
-            //     return press_base / pow(1 + (alt_base - alt_top)*tempRate/temp_top,
-            //                              -G/(tempRate*R))
-            //   else:
-            //     return press_base / exp(-(alt_base - alt_top)*G/(R*temp_top))
-            base_pressure[i] = pressure_at(alt2, t2, alt1, t1, base_pressure[i - 1]);
+        Self::new_at(0.0, t0, p0, 0.0)
+    }
+
+    /// MSL ISA base with the given sea-level T/P and relative humidity.
+    pub fn new_full(t0: f64, p0: f64, rh0: f64) -> Self {
+        Self::new_at(0.0, t0, p0, rh0)
+    }
+
+    /// Faithful port of `ExtendedISAModel(double altitude, double temperature,
+    /// double pressure, double relativeHumidity)`.  `altitude` is the launch
+    /// site's geometric altitude (m MSL); `temperature`/`pressure` are the
+    /// conditions *at that altitude*.  When `altitude > 0` a custom layer is
+    /// inserted at index 1 and a sea-level temperature is back-calculated using
+    /// the lapse rate to the 11 km layer.
+    pub fn new_at(altitude: f64, temperature: f64, pressure: f64, rh0: f64) -> Self {
+        let geopot = geometric_to_geopotential(altitude);
+
+        let (layer, mut base_temperature, mut base_pressure): (Vec<f64>, Vec<f64>, Vec<f64>);
+
+        // OpenRocket throws if the first altitude is at/above the 11 km layer;
+        // we fall back to the MSL construction in that (physically irrelevant
+        // for launch sites) case.
+        if altitude > 0.0 && geopot < STANDARD_LAYERS_M[1] {
+            let n = STANDARD_LAYERS_M.len() + 1; // 9
+            let mut lyr = vec![0.0; n];
+            let mut bt = vec![0.0; n];
+            let mut bp = vec![0.0; n];
+
+            let layer1_alt = STANDARD_LAYERS_M[1];
+            let layer1_temp = STANDARD_TEMPERATURES_K[1];
+            let temp_rate = (layer1_temp - temperature) / (layer1_alt - geopot);
+            let sea_level_temp = temperature - temp_rate * geopot;
+
+            lyr[0] = 0.0;
+            lyr[1] = geopot;
+            bt[0] = sea_level_temp;
+            bt[1] = temperature;
+            // calculatePressure(0, seaLevelTemp, geopot, temperature, pressure)
+            bp[0] = pressure_at(0.0, sea_level_temp, geopot, temperature, pressure);
+            bp[1] = pressure;
+            for i in 2..n {
+                lyr[i] = STANDARD_LAYERS_M[i - 1];
+                bt[i] = STANDARD_TEMPERATURES_K[i - 1];
+            }
+            // Fill remaining layer base pressures by sampling 1 geopotential
+            // metre below the layer top against the already-built lower layers.
+            for i in 2..n {
+                let sample = geopotential_to_geometric(lyr[i] - 1.0);
+                bp[i] = exact_layered(sample, &lyr, &bt, &bp, rh0).pressure;
+            }
+            layer = lyr;
+            base_temperature = bt;
+            base_pressure = bp;
+        } else {
+            let n = STANDARD_LAYERS_M.len();
+            layer = STANDARD_LAYERS_M.to_vec();
+            base_temperature = STANDARD_TEMPERATURES_K.to_vec();
+            base_temperature[0] = temperature;
+            base_pressure = vec![0.0; n];
+            base_pressure[0] = pressure;
+            for i in 1..n {
+                let sample = geopotential_to_geometric(layer[i] - 1.0);
+                base_pressure[i] =
+                    exact_layered(sample, &layer, &base_temperature, &base_pressure, rh0)
+                        .pressure;
+            }
         }
-        let grid = build_grid(&base_temperature, &base_pressure);
-        Self { t0, p0, base_temperature, base_pressure, grid }
+
+        let grid = build_grid(&layer, &base_temperature, &base_pressure, rh0);
+        Self {
+            t0: base_temperature[0],
+            p0: base_pressure[0],
+            rh0,
+            layer,
+            base_temperature,
+            base_pressure,
+            grid,
+        }
     }
 
     /// Direct exact ISA computation (no grid). Matches `getExactConditions`.
     pub fn exact_conditions(&self, altitude_m: f64) -> AtmosphericConditions {
-        exact_at(altitude_m, &self.base_temperature, &self.base_pressure)
+        exact_layered(
+            altitude_m,
+            &self.layer,
+            &self.base_temperature,
+            &self.base_pressure,
+            self.rh0,
+        )
     }
 }
 
@@ -133,41 +243,46 @@ fn lerp(a: f64, b: f64, t: f64) -> f64 {
     a + (b - a) * t
 }
 
-fn exact_at(altitude_m: f64, base_t: &[f64], base_p: &[f64]) -> AtmosphericConditions {
+/// Port of `ExtendedISAModel.getExactConditions(double altitude)` over an
+/// arbitrary (possibly launch-site-extended) layer table.
+fn exact_layered(
+    altitude_m: f64,
+    layer: &[f64],
+    base_t: &[f64],
+    base_p: &[f64],
+    rh: f64,
+) -> AtmosphericConditions {
     let geopot = geometric_to_geopotential(altitude_m);
-    let max_layer = STANDARD_LAYERS_M[STANDARD_LAYERS_M.len() - 1];
-    let clamped = geopot.max(STANDARD_LAYERS_M[0]).min(max_layer);
+    let clamped = geopot.max(layer[0]).min(layer[layer.len() - 1]);
     let mut start = 0;
-    for i in 0..STANDARD_LAYERS_M.len() - 1 {
-        if STANDARD_LAYERS_M[i + 1] > clamped {
+    for i in 0..layer.len() - 1 {
+        if layer[i + 1] > clamped {
             start = i;
             break;
         }
         start = i;
     }
     let t_start = base_t[start];
-    let t_rate = (base_t[start + 1] - t_start)
-        / (STANDARD_LAYERS_M[start + 1] - STANDARD_LAYERS_M[start]);
-    let alt_diff = clamped - STANDARD_LAYERS_M[start];
+    let t_rate = (base_t[start + 1] - t_start) / (layer[start + 1] - layer[start]);
+    let alt_diff = clamped - layer[start];
     let temp = t_start + alt_diff * t_rate;
-    let press = pressure_at(
-        clamped,
-        temp,
-        STANDARD_LAYERS_M[start],
-        t_start,
-        base_p[start],
-    );
-    AtmosphericConditions::from_t_p(temp, press)
+    let press = pressure_at(clamped, temp, layer[start], t_start, base_p[start]);
+    AtmosphericConditions::from_t_p_rh(temp, press, rh)
 }
 
-fn build_grid(base_t: &[f64], base_p: &[f64]) -> Vec<AtmosphericConditions> {
-    let max_geopot = STANDARD_LAYERS_M[STANDARD_LAYERS_M.len() - 1];
+fn build_grid(
+    layer: &[f64],
+    base_t: &[f64],
+    base_p: &[f64],
+    rh: f64,
+) -> Vec<AtmosphericConditions> {
+    let max_geopot = layer[layer.len() - 1];
     let max_geometric = geopotential_to_geometric(max_geopot);
     let n = (max_geometric / DELTA_M).ceil() as usize + 1;
     let mut out = Vec::with_capacity(n);
     for i in 0..n {
         let alt_m = i as f64 * DELTA_M;
-        out.push(exact_at(alt_m, base_t, base_p));
+        out.push(exact_layered(alt_m, layer, base_t, base_p, rh));
     }
     out
 }
@@ -190,14 +305,6 @@ fn geometric_to_geopotential(h: f64) -> f64 {
 
 fn geopotential_to_geometric(h: f64) -> f64 {
     ISA_EARTH_RADIUS * h / (ISA_EARTH_RADIUS - h)
-}
-
-fn sutherland_viscosity(t: f64) -> f64 {
-    // Sutherland's formula matches Java's `AtmosphericConditions.getViscosity`:
-    //   mu = beta * T^1.5 / (T + S)  with beta = 1.458e-6, S = 110.4.
-    let beta = 1.458e-6;
-    let s = 110.4;
-    beta * t.powf(1.5) / (t + s)
 }
 
 #[cfg(test)]

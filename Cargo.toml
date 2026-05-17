@@ -8,6 +8,7 @@ members = [
     "crates/opsrocket-tests",
     "crates/opsrocket-view",
     "crates/opsrocket-web",
+    "crates/opsrocket-wasm",
 ]
 # The Tauri GUI crate is excluded so `cargo test --workspace` stays fast
 # and unaffected by the heavy Tauri dependency tree. Build it from gui/.

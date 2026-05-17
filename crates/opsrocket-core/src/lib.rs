@@ -13,6 +13,7 @@
 pub mod atmosphere;
 pub mod component;
 pub mod geom;
+pub mod gravity;
 pub mod material;
 pub mod mathx;
 pub mod profile;

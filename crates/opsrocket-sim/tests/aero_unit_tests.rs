@@ -54,6 +54,8 @@ fn make_estes_alpha_iii() -> Rocket {
         thickness: 0.0032,
         cant_angle: 0.0,
         cross_section: FinCrossSection::Square,
+        shape: Default::default(),
+        points: Vec::new(),
     };
     let body = BodyTube {
         common: Common::new("alpha-body", "Body Tube"),

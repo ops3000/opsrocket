@@ -45,6 +45,21 @@ pub fn write_ork(path: impl AsRef<Path>, doc: &OrkDocument) -> Result<()> {
     Ok(())
 }
 
+/// Serialize a `.ork` (ZIP container) to an in-memory byte buffer — the
+/// filesystem-free counterpart of [`write_ork`] (browser/WASM save).
+pub fn write_ork_bytes(doc: &OrkDocument) -> Result<Vec<u8>> {
+    let mut buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut zip = zip::ZipWriter::new(&mut buf);
+        let options: zip::write::FileOptions<()> = zip::write::FileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        zip.start_file("rocket.ork", options)?;
+        zip.write_all(render_xml(doc).as_bytes())?;
+        zip.finish()?;
+    }
+    Ok(buf.into_inner())
+}
+
 /// Render the XML body that goes into the ZIP entry. Exposed so callers
 /// can inspect / diff the textual output without writing to disk.
 pub fn render_xml(doc: &OrkDocument) -> String {
@@ -129,12 +144,37 @@ fn render_component(out: &mut String, depth: usize, c: &Component) {
         Component::ShockCord(s) => ("shockcord", Box::new(move |o, d| render_shockcord(o, d, s))),
         Component::LaunchLug(l) => ("launchlug", Box::new(move |o, d| render_launchlug(o, d, l))),
         Component::CenteringRing(r) => ("centeringring", Box::new(move |o, d| render_centeringring(o, d, r))),
+        Component::PodSet(p) => ("podset", Box::new(move |o, d| render_podset(o, d, p))),
+        Component::TubeFinSet(t) => {
+            ("tubefinset", Box::new(move |o, d| render_tubefinset(o, d, t)))
+        }
     };
     indent(out, depth);
     out.push_str(&format!("<{}>\n", tag));
     body(out, depth + 1);
     indent(out, depth);
     out.push_str(&format!("</{}>\n", tag));
+}
+
+fn render_podset(out: &mut String, d: usize, p: &opsrocket_core::component::PodSet) {
+    render_common(out, d, &p.common);
+    push_text(out, d, "instancecount", &p.instance_count.to_string());
+    push_text(out, d, "radiusoffset", &p.radius_offset.to_string());
+    push_text(
+        out,
+        d,
+        "angleoffset",
+        &p.common.angle_offset.to_degrees().to_string(),
+    );
+    if !p.children.is_empty() {
+        indent(out, d);
+        out.push_str("<subcomponents>\n");
+        for child in &p.children {
+            render_component(out, d + 1, child);
+        }
+        indent(out, d);
+        out.push_str("</subcomponents>\n");
+    }
 }
 
 fn render_common(
@@ -319,6 +359,17 @@ fn render_launchlug(out: &mut String, d: usize, l: &opsrocket_core::component::L
     push_text(out, d, "outerradius", &l.outer_radius.to_string());
     push_text(out, d, "innerradius", &l.inner_radius.to_string());
     push_text(out, d, "instancecount", &l.instance_count.to_string());
+}
+
+fn render_tubefinset(out: &mut String, d: usize, t: &opsrocket_core::component::TubeFinSet) {
+    render_common(out, d, &t.common);
+    push_text(out, d, "fincount", &t.fin_count.to_string());
+    push_text(out, d, "length", &t.length.to_string());
+    match t.outer_radius {
+        Some(r) => push_text(out, d, "radius", &r.to_string()),
+        None => push_text(out, d, "radius", "auto"),
+    }
+    push_text(out, d, "thickness", &t.thickness.to_string());
 }
 
 fn render_centeringring(out: &mut String, d: usize, r: &opsrocket_core::component::CenteringRing) {

@@ -1,0 +1,105 @@
+/* OpsRocket workbench — serverless shim.
+ *
+ * Monkey-patches window.fetch so the SPA's /api/* calls are serviced by
+ * the OpsRocket core compiled to WASM, in this same tab. No axum server,
+ * no stateful single-document backend process. Non-/api requests pass
+ * through untouched. Installed synchronously before the app boots.        */
+(function () {
+  let wasmP = null;
+  function wasm() {
+    if (!wasmP)
+      wasmP = (async () => {
+        const m = await import("/opswasm/opsrocket_wasm.js");
+        await m.default("/opswasm/opsrocket_wasm_bg.wasm");
+        return m;
+      })();
+    return wasmP;
+  }
+
+  const realFetch = window.fetch.bind(window);
+  const J = (obj, status = 200) =>
+    new Response(typeof obj === "string" ? obj : JSON.stringify(obj), {
+      status,
+      headers: { "content-type": "application/json" },
+    });
+  const ERR = (e) =>
+    new Response(String((e && e.message) || e), { status: 422 });
+
+  window.fetch = async function (input, init) {
+    const url =
+      typeof input === "string" ? input : input && input.url ? input.url : "";
+    let path;
+    try {
+      path = new URL(url, location.href).pathname;
+    } catch {
+      path = "";
+    }
+    if (!path.startsWith("/api/")) return realFetch(input, init);
+
+    const ep = path.slice(5);
+    const method = ((init && init.method) || "GET").toUpperCase();
+    let body = {};
+    if (init && init.body) {
+      try {
+        body = JSON.parse(init.body);
+      } catch {
+        body = {};
+      }
+    }
+    try {
+      const w = await wasm();
+      switch (ep) {
+        case "health":
+          return new Response("ok", { status: 200 });
+        case "fixtures":
+          return J(await (await realFetch("/orks/index.json")).text());
+        case "load_ork": {
+          const buf = await (await realFetch(body.path)).arrayBuffer();
+          return J(w.session_load(new Uint8Array(buf)));
+        }
+        case "view":
+          return J(w.session_view());
+        case "component":
+          return J(w.session_patch(JSON.stringify(body)));
+        case "component/delete":
+          return J(w.session_delete(JSON.stringify(body)));
+        case "component/add":
+          return J(w.session_add(JSON.stringify(body)));
+        case "undo":
+          return J(w.session_undo());
+        case "redo":
+          return J(w.session_redo());
+        case "motors":
+          return J(w.session_motors());
+        case "assign_motor":
+          return J(w.session_assign_motor(JSON.stringify(body)));
+        case "clear_motor":
+          return J(w.session_clear_motor(JSON.stringify(body)));
+        case "set_ignition":
+          return J(w.session_set_ignition(JSON.stringify(body)));
+        case "sim":
+          return J(w.session_patch_sim(JSON.stringify(body)));
+        case "analysis":
+          return J(w.session_analysis(JSON.stringify(body)));
+        case "optimize":
+          return J(w.session_optimize(JSON.stringify(body)));
+        case "simulate":
+          return J(w.session_simulate(JSON.stringify(body)));
+        case "save": {
+          const bytes = w.session_save();
+          const blob = new Blob([bytes], { type: "application/zip" });
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(blob);
+          a.download = "rocket.ork";
+          a.click();
+          URL.revokeObjectURL(a.href);
+          return J({ saved: "(browser download)" });
+        }
+        default:
+          return new Response("unknown endpoint: " + ep, { status: 404 });
+      }
+    } catch (e) {
+      return ERR(e);
+    }
+  };
+})();

@@ -41,9 +41,30 @@ pub struct SimulationOptions {
     pub time_step: f64,
     pub max_time: f64,
     pub launch_altitude: f64,
+    /// Launch-site air temperature (K). OpenRocket default 288.15.
+    pub launch_temperature: f64,
+    /// Launch-site air pressure (Pa). OpenRocket default 101325.
+    pub launch_pressure: f64,
+    /// Launch-site relative humidity [0,1]. OpenRocket default 0.
+    pub launch_relative_humidity: f64,
     pub launch_pitch_deg: f64,
     pub wind_average: f64,
     pub motor: Option<MotorChoice>,
+}
+
+impl SimulationOptions {
+    /// Build the atmosphere model from the launch-site conditions, mirroring
+    /// `SimulationOptions.getAtmosphericModel()` =
+    /// `new ExtendedISAModel(launchAltitude, launchTemperature,
+    /// launchPressure, launchRelativeHumidity)`.
+    pub fn atmosphere(&self) -> ExtendedIsa {
+        ExtendedIsa::new_at(
+            self.launch_altitude,
+            self.launch_temperature,
+            self.launch_pressure,
+            self.launch_relative_humidity,
+        )
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -60,6 +81,9 @@ impl Default for SimulationOptions {
             time_step: 0.05,
             max_time: 1200.0,
             launch_altitude: 0.0,
+            launch_temperature: 288.15,
+            launch_pressure: 101_325.0,
+            launch_relative_humidity: 0.0,
             launch_pitch_deg: 0.0,
             wind_average: 0.0,
             motor: None,
@@ -244,15 +268,8 @@ fn load_thrust_curve(opts: &SimulationOptions, designation_hint: Option<&str>) -
         Some(MotorChoice::Designation { designation, search_dir }) => Some((designation.clone(), search_dir.clone())),
         _ => designation_hint.map(|d| (d.to_string(), None)),
     };
-    let (designation, search) = want.ok_or_else(|| Error::NoMotor("(unknown)".into()))?;
-    let dirs = if let Some(d) = search { vec![d] } else { default_motor_dirs() };
-    for dir in &dirs {
-        if let Some(path) = find_motor_file(dir, &designation) {
-            let txt = std::fs::read_to_string(&path)?;
-            return Ok(parse_rasp(&txt)?);
-        }
-    }
-    Err(Error::UnknownMotor(designation))
+    let (designation, _search) = want.ok_or_else(|| Error::NoMotor("(unknown)".into()))?;
+    find_motor_curve(&designation, None).ok_or(Error::UnknownMotor(designation))
 }
 
 fn default_motor_dirs() -> Vec<std::path::PathBuf> {
@@ -278,33 +295,39 @@ fn default_motor_dirs() -> Vec<std::path::PathBuf> {
     out
 }
 
-fn find_motor_file(dir: &Path, designation: &str) -> Option<std::path::PathBuf> {
-    find_motor_file_digest(dir, designation, None)
+/// Every available motor `.eng` as `(content)` strings: the embedded
+/// bundled set (always; the sole source on wasm) followed by any on-disk
+/// motor dirs (native — `read_dir` simply yields nothing on wasm). The
+/// embedded set is the canonical `tests/fixtures/motors`, listed first so
+/// designation-first-match results are identical to the previous fs path.
+fn all_motor_blobs() -> Vec<String> {
+    let mut out: Vec<String> = opsrocket_io::motor::embedded_motors()
+        .iter()
+        .map(|(_, c)| (*c).to_string())
+        .collect();
+    for dir in default_motor_dirs() {
+        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.extension().and_then(|s| s.to_str()) != Some("eng") {
+                continue;
+            }
+            if let Ok(txt) = std::fs::read_to_string(&p) {
+                out.push(txt);
+            }
+        }
+    }
+    out
 }
 
-/// Locate a motor `.eng` file in `dir`.
-///
-/// If `want_digest` is supplied, every `.eng` whose designation matches is
-/// parsed and its OpenRocket motor digest computed; the file whose digest
-/// equals `want_digest` exactly is returned (precise disambiguation when
-/// several manufacturers ship e.g. a "C6").  If no digest matches — or none
-/// was supplied — the first designation-name match is returned, preserving
-/// the previous behaviour.
-fn find_motor_file_digest(
-    dir: &Path,
-    designation: &str,
-    want_digest: Option<&str>,
-) -> Option<std::path::PathBuf> {
-    let entries = std::fs::read_dir(dir).ok()?;
-    let mut name_match: Option<std::path::PathBuf> = None;
-    let mut digest_candidates: Vec<std::path::PathBuf> = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("eng") {
-            continue;
-        }
-        let Ok(txt) = std::fs::read_to_string(&path) else { continue };
-        // First non-comment line → designation token.
+/// Pick a motor curve by designation, disambiguated by OpenRocket digest
+/// when supplied (else first designation-name match) — same selection
+/// logic as before, now over in-memory blobs instead of files.
+fn find_motor_curve(designation: &str, want_digest: Option<&str>) -> Option<ThrustCurve> {
+    let blobs = all_motor_blobs();
+    let mut name_match: Option<ThrustCurve> = None;
+    let mut digest_pool: Vec<ThrustCurve> = Vec::new();
+    for txt in &blobs {
         let header = txt
             .lines()
             .map(str::trim)
@@ -314,26 +337,20 @@ fn find_motor_file_digest(
         if !name.eq_ignore_ascii_case(designation) {
             continue;
         }
+        let Ok(curve) = parse_rasp(txt) else { continue };
         if name_match.is_none() {
-            name_match = Some(path.clone());
+            name_match = Some(curve.clone());
         }
         if want_digest.is_some() {
-            digest_candidates.push(path);
+            digest_pool.push(curve);
         }
     }
     if let Some(want) = want_digest {
-        for path in &digest_candidates {
-            if let Ok(txt) = std::fs::read_to_string(path) {
-                if let Ok(curve) = parse_rasp(&txt) {
-                    if curve.digest().eq_ignore_ascii_case(want) {
-                        return Some(path.clone());
-                    }
-                }
+        for c in &digest_pool {
+            if c.digest().eq_ignore_ascii_case(want) {
+                return Some(c.clone());
             }
         }
-        // No exact digest match — fall back to designation-name match but
-        // only after exhausting digest comparison (Java behaviour: use the
-        // closest available motor with a warning).
     }
     name_match
 }
@@ -363,6 +380,9 @@ pub fn simulate_with(
         time_step: sim.time_step.max(0.001),
         max_time: sim.max_time.max(1.0),
         launch_altitude: sim.launch_altitude,
+        launch_temperature: sim.launch_temperature,
+        launch_pressure: sim.launch_pressure,
+        launch_relative_humidity: 0.0,
         launch_pitch_deg: sim.launch_rod_angle.to_degrees(),
         wind_average: sim.wind_average,
         motor: motors_dir.map(|d| MotorChoice::Designation {
@@ -375,7 +395,7 @@ pub fn simulate_with(
     let per_stage = find_motor_assignments_per_stage(&doc.rocket, config_id);
 
     // Load all per-stage thrust curves up front.
-    let search_dir = motors_dir.map(|p| p.to_path_buf()).or_else(|| match &opts.motor {
+    let _search_dir = motors_dir.map(|p| p.to_path_buf()).or_else(|| match &opts.motor {
         Some(MotorChoice::Designation { search_dir, .. }) => search_dir.clone(),
         _ => None,
     });
@@ -390,21 +410,9 @@ pub fn simulate_with(
                         continue;
                     }
                 };
-                let dirs = if let Some(d) = &search_dir {
-                    vec![d.clone()]
-                } else {
-                    default_motor_dirs()
-                };
                 let want_digest = assignment.digest.as_deref();
-                let mut found = None;
-                for dir in &dirs {
-                    if let Some(path) = find_motor_file_digest(dir, designation, want_digest) {
-                        let txt = std::fs::read_to_string(&path)?;
-                        let curve = parse_rasp(&txt)?;
-                        found = Some((curve, *ignition));
-                        break;
-                    }
-                }
+                let found = find_motor_curve(designation, want_digest)
+                    .map(|curve| (curve, *ignition));
                 stage_curves.push(found);
             }
             None => stage_curves.push(None),
@@ -459,7 +467,7 @@ fn run_multistage(
     // (Maintains the previous behaviour for unstaged rockets.)
     let aero_rocket = rocket.clone();
 
-    let atmosphere = ExtendedIsa::default();
+    let atmosphere = opts.atmosphere();
     let pitch_rad = opts.launch_pitch_deg.to_radians();
     let mut state = State::at_rest(opts.launch_altitude, initial_mass.max(0.001), pitch_rad);
 
@@ -922,7 +930,7 @@ fn run(
     initial_mass: f64,
     curve: Option<ThrustCurve>,
 ) -> Result<SimulationResult> {
-    let atmosphere = ExtendedIsa::default();
+    let atmosphere = opts.atmosphere();
     let pitch_rad = opts.launch_pitch_deg.to_radians();
     let mut state = State::at_rest(opts.launch_altitude, initial_mass.max(0.001), pitch_rad);
 
@@ -1349,6 +1357,7 @@ mod tests {
             creator: "test".into(),
             rocket,
             simulations: vec![],
+            decals: Vec::new(),
         };
         // No simulation to run, so we expect NoSuchSimulation rather than EmptyRocket.
         assert!(simulate(&doc, "x").is_err());

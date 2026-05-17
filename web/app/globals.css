@@ -1,0 +1,163 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #05070d;
+  --bg-2: #0a0e1a;
+  --panel: #0e1424;
+  --line: #1c2740;
+  --ink: #e8edf7;
+  --muted: #8a98b8;
+  --accent: #ff2d78; /* OpsRocket magenta */
+  --accent-2: #29e6d4; /* telemetry cyan */
+  --good: #38e08a;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-line: var(--line);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent2: var(--accent-2);
+  --color-good: var(--good);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+* {
+  box-sizing: border-box;
+}
+html {
+  scroll-behavior: smooth;
+}
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+/* Telemetry grid + radial glow used across the hero/sections */
+.tele-grid {
+  background-image:
+    linear-gradient(rgba(41, 230, 212, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(41, 230, 212, 0.06) 1px, transparent 1px);
+  background-size: 46px 46px;
+  mask-image: radial-gradient(ellipse 80% 70% at 50% 35%, #000 40%, transparent 100%);
+}
+.glow {
+  background: radial-gradient(
+    ellipse 60% 50% at 50% 0%,
+    rgba(255, 45, 120, 0.22),
+    transparent 70%
+  );
+}
+.mono {
+  font-family: var(--font-mono), ui-monospace, monospace;
+}
+
+/* The ops.png mark is dark — recolour it solid pink via an alpha mask so
+   it reads on the dark backgrounds. */
+.ops-logo {
+  display: inline-block;
+  background-color: #ec4899;
+  -webkit-mask: url("/ops.png") center / contain no-repeat;
+  mask: url("/ops.png") center / contain no-repeat;
+}
+
+/* Blueprint hero: fine + coarse drafting grid, radial-masked. */
+.bp-grid {
+  background-image:
+    linear-gradient(rgba(41, 230, 212, 0.10) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(41, 230, 212, 0.10) 1px, transparent 1px),
+    linear-gradient(rgba(41, 230, 212, 0.22) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(41, 230, 212, 0.22) 1px, transparent 1px);
+  background-size: 30px 30px, 30px 30px, 150px 150px, 150px 150px;
+  mask-image: radial-gradient(
+    ellipse 95% 85% at 60% 45%,
+    #000 55%,
+    transparent
+  );
+}
+.bp-svg text {
+  fill: var(--muted);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 11px;
+}
+.bp-svg text.cy {
+  fill: var(--accent2);
+}
+@keyframes bp-trace {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+.bp-arc {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-dasharray: 760;
+  stroke-dashoffset: 760;
+  animation: bp-trace 3.2s ease-out 0.4s forwards;
+}
+.card {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+}
+.chip {
+  border: 1px solid var(--line);
+  background: rgba(41, 230, 212, 0.05);
+  border-radius: 999px;
+}
+@keyframes drift {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-46px);
+  }
+}
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.scanline {
+  animation: pulse 2.4s ease-in-out infinite;
+}
+::selection {
+  background: var(--accent);
+  color: #fff;
+}
+table.data {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+table.data th,
+table.data td {
+  text-align: left;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--line);
+}
+table.data th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+table.data td.num,
+table.data th.num {
+  text-align: right;
+}
+table.data td.num {
+  font-family: var(--font-mono), monospace;
+}
