@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { HeroSideviews } from "@/components/HeroSideviews";
+import { HeroPrompt } from "@/components/HeroPrompt";
 import { HEADLINE } from "@/lib/data";
 
 // Home is now just the blueprint hero. PARITY / VALIDATION / RENDER /
@@ -73,20 +74,7 @@ export default function Home() {
               ))}
             </div>
 
-            <div className="mt-9 flex flex-wrap gap-4">
-              <Link
-                href="/workspace"
-                className="rounded-full bg-[var(--accent)] px-6 py-3 text-sm font-semibold text-white transition hover:opacity-90"
-              >
-                Launch the live workbench
-              </Link>
-              <Link
-                href="/validation"
-                className="rounded-full border border-line px-6 py-3 text-sm font-semibold text-ink transition hover:border-[var(--accent2)]"
-              >
-                See the validation data
-              </Link>
-            </div>
+            <HeroPrompt />
           </div>
 
           {/* Right — four real example.ork side-views, drawn live by
