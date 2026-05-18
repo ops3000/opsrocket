@@ -84,27 +84,42 @@ function Plate({
 }
 
 export function HeroSideviews() {
-  const [items, setItems] = useState<
-    { rv: RocketView; name: string; spec: string }[]
-  >([]);
+  // One slot per file; null until that file's view is ready. Each slot
+  // fills independently so plates appear as soon as their own data
+  // arrives instead of waiting for all three (matters a lot on a slow /
+  // high-latency link).
+  const [items, setItems] = useState<(RocketView | null)[]>(() =>
+    FILES.map(() => null),
+  );
 
   useEffect(() => {
     let alive = true;
     (async () => {
+      let w: Awaited<ReturnType<typeof opswasm>>;
       try {
-        const w = await opswasm();
-        const out: { rv: RocketView; name: string; spec: string }[] = [];
-        for (const f of FILES) {
+        w = await opswasm();
+      } catch (e) {
+        console.error("opswasm init failed", e);
+        return;
+      }
+      // Fetch all .ork files concurrently; resolve each slot the moment
+      // its file is parsed (progressive, not all-or-nothing).
+      FILES.forEach(async (f, i) => {
+        try {
           const buf = await (await fetch(f.ork)).arrayBuffer();
           const rv = JSON.parse(
             w.rocket_view(new Uint8Array(buf)),
           ) as RocketView;
-          out.push({ rv, name: f.name, spec: f.spec });
+          if (!alive) return;
+          setItems((prev) => {
+            const next = prev.slice();
+            next[i] = rv;
+            return next;
+          });
+        } catch (e) {
+          console.error("opswasm hero load failed", f.ork, e);
         }
-        if (alive) setItems(out);
-      } catch (e) {
-        console.error("opswasm hero load failed", e);
-      }
+      });
     })();
     return () => {
       alive = false;
@@ -113,18 +128,20 @@ export function HeroSideviews() {
 
   return (
     <div className="flex flex-col gap-4">
-      {items.length === 0
-        ? FILES.map((f) => (
-            <div key={f.ork} className="card px-5 py-4">
-              <div className="mono mb-1 text-[10px] uppercase tracking-wider text-[var(--accent2)]">
-                {f.name}
-              </div>
-              <div className="mono flex h-[120px] items-center justify-center text-[11px] text-muted">
-                rendering via opsrocket-wasm…
-              </div>
+      {FILES.map((f, i) =>
+        items[i] ? (
+          <Plate key={f.ork} rv={items[i]!} name={f.name} spec={f.spec} />
+        ) : (
+          <div key={f.ork} className="card px-5 py-4">
+            <div className="mono mb-1 text-[10px] uppercase tracking-wider text-[var(--accent2)]">
+              {f.name}
             </div>
-          ))
-        : items.map((it) => <Plate key={it.name} {...it} />)}
+            <div className="mono flex h-[120px] items-center justify-center text-[11px] text-muted">
+              rendering via opsrocket-wasm…
+            </div>
+          </div>
+        ),
+      )}
     </div>
   );
 }
