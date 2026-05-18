@@ -25,7 +25,11 @@ export function SiteNav({ active }: { active?: string }) {
       <div className="bp-grid absolute inset-0 opacity-60" />
       <nav className="relative z-10 mx-auto flex w-full max-w-7xl items-center justify-between px-6 py-6">
         <Link href="/" className="flex items-center gap-3">
-          <span className="ops-logo h-9 w-9" role="img" aria-label="OpsRocket" />
+          <img
+            src="/ops.png"
+            alt="OpsRocket"
+            className="ops-logo h-9 w-9"
+          />
           <span className="text-lg font-bold tracking-tight text-ink">
             OpsRocket
           </span>
@@ -61,7 +65,11 @@ export function SiteFooter() {
     <footer className="relative overflow-hidden border-t border-line">
       <div className="glow absolute inset-x-0 top-0 h-40" />
       <div className="relative mx-auto flex max-w-6xl flex-col items-center gap-6 px-6 py-20 text-center">
-        <span className="ops-logo h-12 w-12" role="img" aria-label="OpsRocket" />
+        <img
+          src="/ops.png"
+          alt="OpsRocket"
+          className="ops-logo h-12 w-12"
+        />
         <h2 className="text-3xl font-bold sm:text-4xl">
           Open a design. Watch the numbers match.
         </h2>

@@ -212,6 +212,10 @@ fn parse_rocket(reader: &mut Reader<&[u8]>) -> Result<Rocket> {
                         let v = read_text(reader, name.as_ref())?;
                         rocket.reference_length = v.parse::<f64>().ok();
                     }
+                    b"isperfectfinish" => {
+                        rocket.is_perfect_finish =
+                            read_text(reader, b"isperfectfinish")?.trim() == "true";
+                    }
                     b"motorconfiguration" => {
                         let mut config_id = String::new();
                         let mut default = false;
@@ -448,6 +452,21 @@ fn parse_common_field(
         b"overridesubcomponentsmass" => {
             common.override_subcomponents_mass =
                 read_text(reader, b"overridesubcomponentsmass")?.trim() == "true";
+            Ok(true)
+        }
+        b"overridecd" => {
+            common.cd_override = read_text(reader, b"overridecd")?.parse().ok();
+            Ok(true)
+        }
+        b"overridesubcomponentscd" => {
+            common.override_subcomponents_cd =
+                read_text(reader, b"overridesubcomponentscd")?.trim() == "true";
+            Ok(true)
+        }
+        b"finish" => {
+            common.finish = opsrocket_core::component::Finish::from_ork(
+                &read_text(reader, b"finish")?,
+            );
             Ok(true)
         }
         _ => Ok(false),
@@ -1367,6 +1386,7 @@ fn parse_simulation(reader: &mut Reader<&[u8]>) -> Result<CachedSimulation> {
         config_id: None,
         launch_rod_length: 1.0,
         launch_rod_angle: 0.0,
+        launch_rod_direction: 0.0,
         launch_altitude: 0.0,
         launch_temperature: 288.15,
         launch_pressure: 101_325.0,
@@ -1413,10 +1433,23 @@ fn parse_conditions(reader: &mut Reader<&[u8]>, s: &mut CachedSimulation) -> Res
                     b"configid" => s.config_id = Some(read_text(reader, b"configid")?),
                     b"launchrodlength" => s.launch_rod_length = parse_f64(reader, b"launchrodlength")?,
                     b"launchrodangle" => s.launch_rod_angle = parse_f64(reader, b"launchrodangle")?,
+                    b"launchroddirection" => {
+                        // .ork stores degrees; OpenRocket converts to radians.
+                        s.launch_rod_direction =
+                            parse_f64(reader, b"launchroddirection")?.to_radians()
+                    }
                     b"launchaltitude" => s.launch_altitude = parse_f64(reader, b"launchaltitude")?,
                     b"launchtemperature" => s.launch_temperature = parse_f64(reader, b"launchtemperature")?,
                     b"launchpressure" => s.launch_pressure = parse_f64(reader, b"launchpressure")?,
+                    b"launchlatitude" => s.launch_latitude = parse_f64(reader, b"launchlatitude")?,
+                    b"launchlongitude" => s.launch_longitude = parse_f64(reader, b"launchlongitude")?,
+                    b"geodeticmethod" => {
+                        s.geodetic_method =
+                            read_text(reader, b"geodeticmethod")?.trim().to_lowercase()
+                    }
                     b"windaverage" => s.wind_average = parse_f64(reader, b"windaverage")?,
+                    b"windturbulence" => s.wind_turbulence = parse_f64(reader, b"windturbulence")?,
+                    b"winddirection" => s.wind_direction = parse_f64(reader, b"winddirection")?,
                     b"timestep" => s.time_step = parse_f64(reader, b"timestep")?,
                     b"maxtime" => s.max_time = parse_f64(reader, b"maxtime")?,
                     other => skip_to_end(reader, other)?,

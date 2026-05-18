@@ -270,6 +270,105 @@ pub fn shell_volume_cg(
     (volume.max(0.0), cg)
 }
 
+/// `SymmetricComponent.calculateUnitRotMOI` (returns 10/3 × the true value;
+/// corrected by the ×3/10 factor in `shell_unit_inertia`).
+fn calc_unit_rot_moi(r1: f64, r2: f64) -> f64 {
+    if (r1 - r2).abs() < 1.0e-12 {
+        return 10.0 * r1 * r1 / 6.0;
+    }
+    (r2.powi(5) - r1.powi(5)) / (r2.powi(3) - r1.powi(3))
+}
+
+/// `SymmetricComponent.calculateLongMOICone` (requires ×π later, which
+/// cancels in the unit-inertia normalisation).
+fn calc_long_moi_cone(h: f64, r: f64) -> f64 {
+    let m = r * r * h;
+    3.0 * m * (r * r / 20.0 + h * h / 5.0)
+}
+
+/// `SymmetricComponent.calculateLongMOI` (frustum longitudinal MOI about its
+/// CG; `cg` = (volume-proxy weight, cg-x) from `frustum_cg`).
+fn calc_long_moi(l: f64, mut r1: f64, mut r2: f64, cg_w: f64, cg_x: f64) -> f64 {
+    if (r1 - r2).abs() < 1.0e-12 {
+        return cg_w * (3.0 * r1 * r1 + l * l) / 12.0;
+    }
+    let mut shift_cg = cg_x;
+    if r1 > r2 {
+        std::mem::swap(&mut r1, &mut r2);
+        shift_cg = l - cg_x;
+    }
+    let h2 = l * r2 / (r2 - r1);
+    let h1 = h2 * r1 / r2;
+    let moi1 = calc_long_moi_cone(h1, r1);
+    let moi2 = calc_long_moi_cone(h2, r2);
+    let mut moi = moi2 - moi1;
+    moi -= (h1 + shift_cg).powi(2) * cg_w;
+    moi
+}
+
+/// Faithful port of the MOI part of `SymmetricComponent.calculateProperties`.
+/// Returns `(rotational_unit_inertia, longitudinal_unit_inertia)` — exactly
+/// `getRotationalUnitInertia()` / `getLongitudinalUnitInertia()` (the latter
+/// already shifted to the component CG). Multiply by the component mass to
+/// get the physical MOI (`MassCalculation.calculateStructure`).
+pub fn shell_unit_inertia(
+    shape: NoseShape,
+    param: f64,
+    length: f64,
+    r_fore: f64,
+    r_aft: f64,
+    thickness: f64,
+    filled: bool,
+) -> (f64, f64) {
+    if length < 1.0e-9 {
+        return (0.0, 0.0);
+    }
+    const DIVISIONS: usize = 128;
+    let mut volume = 0.0;
+    let mut cgx = 0.0;
+    let mut rot = 0.0;
+    let mut long = 0.0;
+    for n in 0..DIVISIONS {
+        let x1 = n as f64 * length / DIVISIONS as f64;
+        let x2 = (n + 1) as f64 * length / DIVISIONS as f64;
+        let l = x2 - x1;
+        let r1o = shape_radius(shape, param, x1, r_fore, r_aft, length);
+        let r2o = shape_radius(shape, param, x2, r_fore, r_aft, length);
+        let hyp = ((r2o - r1o).powi(2) + l * l).sqrt();
+        let height = thickness * hyp / l;
+        let (r1i, r2i) = if filled {
+            (0.0, 0.0)
+        } else {
+            ((r1o - height).max(0.0), (r2o - height).max(0.0))
+        };
+        let (vf, cgf) = frustum_cg(l, r1o, r2o);
+        let (vi, cgi) = frustum_cg(l, r1i, r2i);
+        let dv = vf - vi;
+        if dv.abs() < 1.0e-15 {
+            continue;
+        }
+        let dcg = (cgf * vf - cgi * vi) / dv;
+        let ixxo = calc_unit_rot_moi(r1o, r2o);
+        let ixxi = calc_unit_rot_moi(r1i, r2i);
+        let ixx = ixxo * vf - ixxi * vi;
+        let mut iyy = calc_long_moi(l, r1o, r2o, vf, cgf) - calc_long_moi(l, r1i, r2i, vi, cgi);
+        iyy += dv * (x1 + dcg).powi(2);
+        volume += dv;
+        cgx += dv * (x1 + dcg);
+        rot += ixx;
+        long += iyy;
+    }
+    if volume < 1.0e-12 {
+        return (0.0, 0.0);
+    }
+    rot /= volume;
+    long /= volume;
+    rot *= 3.0 / 10.0;
+    let cg_x = cgx / volume;
+    long -= cg_x * cg_x;
+    (rot, long)
+}
+
 /// Convenience: integrals for a [`Transition`] component.
 pub fn transition_integrals(t: &Transition) -> ShapeIntegrals {
     shape_integrals(t.shape, t.shape_parameter, t.length, t.fore_radius, t.aft_radius)

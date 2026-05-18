@@ -41,6 +41,8 @@ fn make_estes_alpha_iii() -> Rocket {
         aft_shoulder_thickness: 0.001,
         aft_shoulder_capped: false,
         is_flipped: false,
+        filled: false,
+        children: vec![],
     };
     let mut fin_common = Common::new("alpha-fins", "3 Fin Set");
     fin_common.axial_method = AxialMethod::Bottom;
@@ -56,6 +58,9 @@ fn make_estes_alpha_iii() -> Rocket {
         cross_section: FinCrossSection::Square,
         shape: Default::default(),
         points: Vec::new(),
+        tab_length: 0.0,
+        tab_height: 0.0,
+        fillet_radius: 0.0,
     };
     let body = BodyTube {
         common: Common::new("alpha-body", "Body Tube"),

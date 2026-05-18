@@ -288,13 +288,45 @@ impl Accumulator {
 /// nests inside body tubes and motor-mount inner tubes (engine block,
 /// centering rings, …). PodSet recursion stays inside `accumulate`.
 fn accumulate_rec(acc: &mut Accumulator, comp: &Component, axial_start: f64) {
-    accumulate_rec_n(acc, comp, axial_start, 1);
+    accumulate_rec_n(acc, comp, axial_start, 1, 0.0);
+}
+
+/// Parent body radius seen by a child component at `child_x` (for fin
+/// `getBodyRadius`).
+fn parent_body_radius(parent: &Component, child_x: f64, parent_x: f64) -> f64 {
+    match parent {
+        Component::BodyTube(t) => t.radius.unwrap_or(0.0),
+        Component::InnerTube(it) => it.outer_radius,
+        Component::Transition(t) => opsrocket_core::profile::shape_radius(
+            t.shape,
+            t.shape_parameter,
+            (child_x - parent_x).clamp(0.0, t.length),
+            t.fore_radius,
+            t.aft_radius,
+            t.length,
+        ),
+        Component::NoseCone(n) => opsrocket_core::profile::shape_radius(
+            n.shape,
+            n.shape_parameter,
+            (child_x - parent_x).clamp(0.0, n.length),
+            0.0,
+            n.aft_radius,
+            n.length,
+        ),
+        _ => 0.0,
+    }
 }
 
 /// `reps` = how many physical copies of this subtree exist (inner-tube
 /// clustering replicates the whole motor-mount assembly). Cluster is a
 /// radial arrangement, so mass + axial CG are simply ×reps at the same x.
-fn accumulate_rec_n(acc: &mut Accumulator, comp: &Component, axial_start: f64, reps: u32) {
+fn accumulate_rec_n(
+    acc: &mut Accumulator,
+    comp: &Component,
+    axial_start: f64,
+    reps: u32,
+    parent_radius: f64,
+) {
     // Component-level assembly mass override: the whole subtree weighs
     // exactly mass_override (× reps), at cg_override or the subtree CG;
     // children are not walked.
@@ -302,7 +334,7 @@ fn accumulate_rec_n(acc: &mut Accumulator, comp: &Component, axial_start: f64, r
     if cm.override_subcomponents_mass {
         if let Some(m) = cm.mass_override {
             let mut sub = Accumulator::default();
-            accumulate(&mut sub, comp, axial_start);
+            accumulate(&mut sub, comp, axial_start, parent_radius);
             let (children, len): (&[Component], f64) = match comp {
                 Component::BodyTube(t) => (&t.children, t.length),
                 Component::InnerTube(it) => (&it.children, it.length),
@@ -327,7 +359,7 @@ fn accumulate_rec_n(acc: &mut Accumulator, comp: &Component, axial_start: f64, r
         _ => reps,
     };
     for _ in 0..self_reps.max(1) {
-        accumulate(acc, comp, axial_start);
+        accumulate(acc, comp, axial_start, parent_radius);
     }
     let (children, len, child_reps): (&[Component], f64, u32) = match comp {
         Component::BodyTube(t) => (&t.children, t.length, self_reps),
@@ -349,11 +381,12 @@ fn accumulate_rec_n(acc: &mut Accumulator, comp: &Component, axial_start: f64, r
         return;
     }
     for (sub, sl) in layout_children(children, axial_start, axial_start + len) {
-        accumulate_rec_n(acc, sub, sl.axial_start, child_reps);
+        let child_parent_r = parent_body_radius(comp, sl.axial_start, axial_start);
+        accumulate_rec_n(acc, sub, sl.axial_start, child_reps, child_parent_r);
     }
 }
 
-fn accumulate(acc: &mut Accumulator, comp: &Component, axial_start: f64) {
+fn accumulate(acc: &mut Accumulator, comp: &Component, axial_start: f64, parent_radius: f64) {
     match comp {
         Component::NoseCone(n) => add_nosecone(acc, n, axial_start),
         Component::BodyTube(b) => add_bodytube(acc, b, axial_start),
@@ -395,10 +428,28 @@ fn accumulate(acc: &mut Accumulator, comp: &Component, axial_start: f64) {
             };
             let total_mass = override_mass(&fs.common, mass_each * fs.fin_count as f64);
             let cg = override_cg(&fs.common, axial_start + 0.5 * fs.root_chord);
-            // crude approximation - fins are thin and offset from axis
-            let i_long = total_mass * pow2(0.5 * fs.height);
-            let i_rot_local = total_mass * pow2(0.5 * fs.root_chord);
-            acc.add(total_mass, cg, i_long, i_rot_local);
+            // Faithful FinSet.getRotationalUnitInertia / getLongitudinalUnitInertia
+            // (rectangular-plate approximation + multi-fin parallel-axis to the
+            // FinSet centre, using the parent body radius).
+            let spa = fin_area(fs);
+            let w = fs.root_chord;
+            let h = fs.height;
+            let (w2, h2) = if (h * w).abs() < 1e-12 {
+                (spa, spa)
+            } else {
+                (w * spa / h, h * spa / w)
+            };
+            let br = parent_radius;
+            // rotational (roll) unit inertia → opsrocket i_long
+            let mut rot_u = h2 / 12.0;
+            // longitudinal (pitch) unit inertia → opsrocket i_rot_local
+            let mut long_u = (h2 + 2.0 * w2) / 24.0;
+            if fs.fin_count > 1 {
+                let off = h2.max(0.0).sqrt() / 2.0 + br;
+                rot_u += off * off;
+                long_u += off * off / 2.0;
+            }
+            acc.add(total_mass, cg, total_mass * rot_u, total_mass * long_u);
         }
         Component::Parachute(p) => {
             // Canopy mass uses the parachute's own (surface) material.
@@ -447,10 +498,22 @@ fn accumulate(acc: &mut Accumulator, comp: &Component, axial_start: f64) {
             };
             let total = override_mass(&tf.common, mass_each * tf.fin_count as f64);
             let cg = override_cg(&tf.common, axial_start + 0.5 * tf.length);
-            // Tubes ride ~2r off the axis; crude transverse/longitudinal MoI.
-            let i_long = total * pow2(2.0 * r);
-            let i_rot_local = total * pow2(0.5 * tf.length);
-            acc.add(total, cg, i_long, i_rot_local);
+            // Faithful TubeFinSet.getRotationalUnitInertia /
+            // getLongitudinalUnitInertia (verbatim, incl. the OpenRocket
+            // multi-fin `+ bodyRadius` quirk).
+            let ro = r;
+            let ri = (ro - tf.thickness).max(0.0);
+            let n = tf.fin_count.max(1) as f64;
+            let long1 = (3.0 * (ro * ro + ri * ri) + tf.length * tf.length) / 12.0;
+            // axialOffset of the tube assembly ≈ 0 (centred on the body).
+            let long_u = if tf.fin_count > 1 { n * long1 } else { long1 };
+            let icm = (ri * ri + ro * ro) / 2.0;
+            let rot_u = if tf.fin_count > 1 {
+                n * (icm + ro * ro + parent_radius)
+            } else {
+                icm
+            };
+            acc.add(total, cg, total * rot_u, total * long_u);
         }
     }
 }
@@ -539,16 +602,16 @@ fn add_nosecone(acc: &mut Accumulator, n: &NoseCone, axial_start: f64) {
         // the override so a user-supplied mass still has the right CG.
         let combined_cg = (shell_mass * shell_cg + shoulder_mass * shoulder_cg) / total_computed;
         let cg = override_cg(&n.common, combined_cg);
-        let r = n.aft_radius;
-        let i_long = total * 0.5 * r * r * 0.5;
-        let i_rot_local = total * (3.0 * r * r + n.length * n.length) / 20.0;
-        acc.add(total, cg, i_long, i_rot_local);
+        let (rot_u, long_u) = opsrocket_core::profile::shell_unit_inertia(
+            n.shape, n.shape_parameter, n.length, 0.0, n.aft_radius, n.thickness, n.filled,
+        );
+        acc.add(total, cg, total * rot_u, total * long_u);
     } else if total > 0.0 {
         let cg = override_cg(&n.common, axial_start + 0.75 * n.length);
-        let r = n.aft_radius;
-        let i_long = total * 0.5 * r * r * 0.5;
-        let i_rot_local = total * (3.0 * r * r + n.length * n.length) / 20.0;
-        acc.add(total, cg, i_long, i_rot_local);
+        let (rot_u, long_u) = opsrocket_core::profile::shell_unit_inertia(
+            n.shape, n.shape_parameter, n.length, 0.0, n.aft_radius, n.thickness, n.filled,
+        );
+        acc.add(total, cg, total * rot_u, total * long_u);
     }
 }
 
@@ -619,10 +682,16 @@ fn add_transition(
     };
     let mass = override_mass(&t.common, computed_mass);
     let cg = override_cg(&t.common, computed_cg);
-    let r_eff = 0.5 * (t.fore_radius + t.aft_radius);
-    let i_long = 0.5 * mass * r_eff * r_eff;
-    let i_rot_local = mass * (3.0 * r_eff * r_eff + t.length * t.length) / 12.0;
-    acc.add(mass, cg, i_long, i_rot_local);
+    let (rot_u, long_u) = opsrocket_core::profile::shell_unit_inertia(
+        t.shape,
+        t.shape_parameter,
+        t.length,
+        t.fore_radius,
+        t.aft_radius,
+        t.thickness,
+        t.filled,
+    );
+    acc.add(mass, cg, mass * rot_u, mass * long_u);
 }
 
 fn add_innertube(acc: &mut Accumulator, it: &opsrocket_core::component::InnerTube, axial_start: f64) {
@@ -680,7 +749,7 @@ fn override_cg(c: &Common, computed: f64) -> f64 {
 /// rocket calc but stops at a single component.
 pub fn single_component_mass(c: &Component) -> f64 {
     let mut acc = Accumulator::default();
-    accumulate(&mut acc, c, 0.0);
+    accumulate(&mut acc, c, 0.0, 0.0);
     acc.finish().mass
 }
 

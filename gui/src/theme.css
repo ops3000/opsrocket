@@ -93,6 +93,42 @@ header h1 {
   letter-spacing: -0.02em;
   color: var(--accent);
 }
+header .logo-link {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+header .logo {
+  height: 26px;
+  width: auto;
+  object-fit: contain;
+  display: block;
+  cursor: pointer;
+}
+
+/* Themed scrollbars — replace the chunky OS default everywhere. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+*::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 6px;
+  border: 2px solid var(--panel);
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
 
 header .meta { color: var(--muted); font-size: 13px; }
 
@@ -506,7 +542,22 @@ button.link:hover { background: none; color: var(--accent); }
   font-size: 13px;
   cursor: default;
   display: flex;
-  justify-content: space-between;
+  align-items: center;
+  gap: 2px;
+}
+.tree-item .ci {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+  object-fit: contain;
+  margin-right: 7px;
+  opacity: 0.92;
+}
+.tree-item .nm {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .tree-item:hover { background: var(--bg); }
 .tree-item:hover .del { visibility: visible; }
@@ -562,6 +613,28 @@ button.link:hover { background: none; color: var(--accent); }
   position: relative;
   overflow: hidden;
   border-bottom: 1px solid var(--line);
+}
+
+/* Draggable horizontal divider between the view and the flight chart. */
+.vsplit {
+  position: relative;
+  background: var(--line);
+  cursor: row-resize;
+  touch-action: none;
+  transition: background 0.12s;
+}
+.vsplit:hover,
+.vsplit:active {
+  background: var(--accent);
+}
+/* keep the visual line thin but the grab area comfortable */
+.vsplit::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -7px;
+  bottom: -7px;
 }
 .panel .tag {
   position: absolute;

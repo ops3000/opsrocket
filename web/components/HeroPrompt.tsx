@@ -25,25 +25,17 @@ export function HeroPrompt() {
       className="mt-9 flex w-full max-w-xl items-center gap-3 rounded-full px-2 py-2"
       style={{
         background: "var(--bg-2)",
-        border: "2px solid var(--accent)",
+        border: "1px solid var(--accent)",
         boxShadow:
-          "0 0 0 4px rgba(255,45,120,0.10), 0 8px 30px rgba(255,45,120,0.18)",
+          "0 0 0 3px rgba(255,45,120,0.08), 0 8px 28px rgba(255,45,120,0.16)",
       }}
     >
-      {/* Left badge — the ops mark, white on accent */}
+      {/* Left badge — the pink ops mark on a light disc */}
       <span
-        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full"
-        style={{ background: "var(--accent)" }}
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white"
         aria-hidden="true"
       >
-        <span
-          className="h-6 w-6"
-          style={{
-            backgroundColor: "#fff",
-            WebkitMask: "url('/ops.png') center / contain no-repeat",
-            mask: "url('/ops.png') center / contain no-repeat",
-          }}
-        />
+        <img src="/ops-mark.png" alt="" className="h-6 w-6 object-contain" />
       </span>
 
       <input
@@ -58,7 +50,7 @@ export function HeroPrompt() {
       <button
         type="submit"
         aria-label="Launch the workbench"
-        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition hover:opacity-90"
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition hover:opacity-90"
         style={{ background: "var(--accent)" }}
       >
         <svg

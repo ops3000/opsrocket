@@ -15,10 +15,7 @@
 //!   - `cpCache  = (L·A1 − V_full) / (A1 − A0)` — slender-body CP
 //!   - `BODY_LIFT_K = 1.1` — Galejs body-lift coefficient
 
-use opsrocket_core::component::{
-    Common, Component, FinCrossSection, FinSet, FinShape, NoseCone, Rocket, Transition,
-    TubeFinSet,
-};
+use opsrocket_core::component::{Component, FinSet, NoseCone, Rocket, Transition};
 use opsrocket_core::mathx::pow2;
 use opsrocket_core::profile::{shape_integrals, ShapeIntegrals};
 use opsrocket_core::units::PI;
@@ -153,26 +150,9 @@ pub fn compute_with(
     // Fin sets, evaluated in the θ-worst-case sweep below:
     // (cna1_eff, cp_x_abs, fin_count, base_clock_angle).
     let mut fin_sets: Vec<(f64, f64, u32, f64)> = Vec::new();
-    let mut cd_friction = 0.0_f64;
-    let mut cd_pressure = 0.0_f64;
-    let cd_base;
-
-    // Java BarrowmanDragCalculator: Reynolds is `v · L_aero / ν`, i.e. the
-    // full Reynolds based on the rocket's aerodynamic length, computed once
-    // and applied to every component.  Our caller passes `fc.reynolds` as
-    // the per-metre value ρ·v/μ, so multiply by the aerodynamic length to
-    // recover Java's Re.
-    let body_length = rocket.total_length().max(1e-3);
-    let reynolds_full = (fc.reynolds * body_length).max(1.0);
-    let cf_base = friction_coefficient(reynolds_full, fc.mach);
-    let cf_rough = roughness_limited_cf(body_length, fc.mach);
-    let cf = cf_base.max(cf_rough);
-    // Track max body radius and total body length for the body-friction
-    // correction factor at the end.
-    let mut body_friction_sum = 0.0_f64;
-    let mut max_body_radius = 0.0_f64;
-    let mut min_body_x = f64::INFINITY;
-    let mut max_body_x = 0.0_f64;
+    // Drag (friction / pressure / base / override / axial) is produced by the
+    // faithful `BarrowmanDragCalculator` port. CP/CNa below is unchanged.
+    let drag = crate::aero_drag::compute_drag(rocket, fc.mach, fc.reynolds, area_ref);
 
     // We compute two CN_α families simultaneously:
     //   - slender-body / fin Barrowman: linear in α, AOA-independent slope
@@ -215,19 +195,9 @@ pub fn compute_with(
                 let lift_w = body_lift_weight * integ.planform_area / area_ref * reps;
                 lift_cn += lift_w;
                 lift_cn_x += lift_w * (axial_start + integ.planform_center);
-                body_friction_sum += cf * integ.wet_area / area_ref * reps;
-                if n.aft_radius > max_body_radius { max_body_radius = n.aft_radius; }
-                min_body_x = min_body_x.min(*axial_start);
-                max_body_x = max_body_x.max(axial_start + n.length);
-                cd_pressure += nose_pressure_drag(n.shape, n.shape_parameter, n.length, n.aft_radius, fc.mach);
             }
             Component::BodyTube(t) => {
                 let radius = t.radius.unwrap_or(0.0);
-                let wet = 2.0 * PI * radius * t.length;
-                body_friction_sum += cf * wet / area_ref;
-                if radius > max_body_radius { max_body_radius = radius; }
-                min_body_x = min_body_x.min(*axial_start);
-                max_body_x = max_body_x.max(axial_start + t.length);
                 let planform_area = 2.0 * radius * t.length;
                 let planform_center = 0.5 * t.length;
                 let lift_w = body_lift_weight * planform_area / area_ref * reps;
@@ -243,12 +213,6 @@ pub fn compute_with(
                 let lift_w = body_lift_weight * integ.planform_area / area_ref * reps;
                 lift_cn += lift_w;
                 lift_cn_x += lift_w * (axial_start + integ.planform_center);
-                body_friction_sum += cf * integ.wet_area / area_ref * reps;
-                let max_r = t.fore_radius.max(t.aft_radius);
-                if max_r > max_body_radius { max_body_radius = max_r; }
-                min_body_x = min_body_x.min(*axial_start);
-                max_body_x = max_body_x.max(axial_start + t.length);
-                cd_pressure += transition_pressure_drag(t, fc.mach, area_ref);
             }
             Component::FinSet(f) => {
                 let body_radius = local_body_radius(&layout, *axial_start).unwrap_or(0.0);
@@ -266,17 +230,6 @@ pub fn compute_with(
                         f.common.angle_offset,
                     ));
                 }
-                // Fin friction is NOT subject to the body-fineness correction.
-                cd_friction += fin_friction_drag(f, cf, area_ref);
-                cd_pressure += fin_pressure_drag(f, fc.mach, area_ref);
-            }
-            Component::LaunchLug(l) => {
-                // Java LaunchLugCalc.calculateFrictionCD returns 0 verbatim
-                // ("launch lug doesn't add enough area to worry about").
-                // Only the TubeCalc internal-flow pressure drag is counted.
-                let n = l.instance_count as f64;
-                cd_pressure += n * tube_internal_pressure_cd(
-                    l.outer_radius, l.inner_radius, l.length, fc, area_ref);
             }
             Component::TubeFinSet(tf) => {
                 // Faithful port of OpenRocket TubeFinSetCalc: each tube is a
@@ -300,11 +253,6 @@ pub fn compute_with(
                     cn_total += cna_total;
                     cn_x += cna_total * (axial_start + cpos * chord);
                 }
-                // Drag still uses the equivalent-fin approximation (a
-                // separate concern from CP/stability parity).
-                let eqv = tubefin_equiv_finset(tf, body_radius);
-                cd_friction += fin_friction_drag(&eqv, cf, area_ref);
-                cd_pressure += fin_pressure_drag(&eqv, fc.mach, area_ref);
             }
             // Java InternalComponent.isAerodynamic() == false — InnerTube,
             // CenteringRing, MassObject, Parachute, ShockCord do not appear
@@ -313,22 +261,9 @@ pub fn compute_with(
         }
     }
 
-    // Apply body-fineness friction correction (Java BarrowmanDragCalculator,
-    // line 167): correction = 1 + 1/(2·fB) where fB = total_length / maxR.
-    if max_body_radius > 0.0 && max_body_x > min_body_x {
-        let correction = body_friction_correction(max_body_x - min_body_x, max_body_radius);
-        cd_friction += body_friction_sum * correction;
-    } else {
-        cd_friction += body_friction_sum;
-    }
-
-    // Java BarrowmanDragCalculator.calculateBaseCD: returns 0.12 + 0.13·M²
-    // regardless of motor firing.  The base annulus is always subject to
-    // separated-flow drag in OR's model; the motor jet effect would have
-    // to be modelled separately via a thrust-coupling term we don't have.
+    // Base drag is computed (with A_base/A_ref normalization) inside
+    // `compute_drag`; OpenRocket keeps it regardless of motor firing.
     let _ = motor_firing;
-    cd_base = base_drag(fc.mach);
-    let _ = body_friction_correction; // silence warning when unused
 
     // Java's BarrowmanCalculator combines slender-body and body-lift
     // contributions via Coordinate.average (weighted by their CN_α / weight
@@ -376,13 +311,12 @@ pub fn compute_with(
     };
     cn_total = total_weight - lift_cn;
     let cn_at_alpha = alpha * total_weight;
-    let cd = cd_friction + cd_pressure + cd_base;
     AeroCoefficients {
         cn_alpha: cn_total,
-        cd,
-        cd_friction,
-        cd_pressure,
-        cd_base,
+        cd: drag.cd,
+        cd_friction: drag.friction,
+        cd_pressure: drag.pressure + drag.override_cd,
+        cd_base: drag.base,
         cp_axial,
         reference_area: area_ref,
         reference_length: d_ref,
@@ -430,6 +364,55 @@ pub struct BodyLiftGeometry {
 /// Returns the damping coefficient `mul` such that
 /// `Cm_damp = 3 · mul · (ω/V)²` (with the factor 3 from the "higher damping
 /// yields more realistic apogee turn" empirical scaling in Java).
+/// Roll coefficients from canted fins — a faithful-enough port of
+/// `FinSetCalc` roll forcing/damping. Returns `(roll_forcing, roll_damp)`
+/// where the roll moment is `Croll·q·S·L`, `Croll = roll_forcing −
+/// roll_damp·(rollRate/V)`.
+pub fn fin_roll_coeffs(rocket: &Rocket) -> (f64, f64) {
+    let layout = iter_layout(rocket);
+    let d_ref = rocket.max_diameter();
+    let area_ref = PI * 0.25 * d_ref * d_ref;
+    let ref_len = d_ref;
+    if area_ref <= 0.0 || ref_len <= 0.0 {
+        return (0.0, 0.0);
+    }
+    let mut forcing = 0.0_f64;
+    let mut damp = 0.0_f64;
+    for (comp, axial_start) in &layout {
+        if let Component::FinSet(f) = comp {
+            let s = f.height;
+            if s <= 0.0 {
+                continue;
+            }
+            let r = local_body_radius(&layout, *axial_start).unwrap_or(0.0);
+            let cr = f.root_chord;
+            let ct = f.tip_chord;
+            let area = 0.5 * (cr + ct) * s;
+            if area <= 1e-12 {
+                continue;
+            }
+            let cos_g = {
+                let mid = (f.sweep_length + 0.5 * (ct - cr)).atan2(s);
+                mid.cos().max(1e-3)
+            };
+            // Subsonic single-fin CNa1 (M≈0), FinSetCalc.calculateFinCNa1.
+            let denom = 1.0 + (1.0 + pow2(s * s / (area * cos_g))).sqrt();
+            let cna1 = 2.0 * PI * s * s / denom / area_ref;
+            let tau = r / (s + r).max(1e-9);
+            // Spanwise MAC ≈ r + 0.4244·s (trapezoid centroid-ish).
+            let mac_span = r + 0.4244 * s;
+            // CrollForce (FinSetCalc line 173): includes cant angle.
+            forcing += (mac_span + r) * cna1 * (1.0 + tau) * f.cant_angle / ref_len;
+            // CrollDamp subsonic ≈ 2π·rollSum/(S·L), rollSum ≈ Σ_fins
+            // chord·(r+y)²·dy ≈ N·area·(r + s/2)².
+            let roll_sum =
+                f.fin_count as f64 * area * pow2(r + 0.5 * s);
+            damp += 2.0 * PI * roll_sum / (area_ref * ref_len);
+        }
+    }
+    (forcing, damp)
+}
+
 pub fn pitch_damping_coefficient(rocket: &Rocket, cgx: f64) -> f64 {
     let layout = iter_layout(rocket);
     let d_ref = rocket.max_diameter();
@@ -560,7 +543,7 @@ fn slender_body_cna(
     (cn_local / area_ref, cp_local)
 }
 
-fn local_body_radius(layout: &[(&Component, f64)], axial: f64) -> Option<f64> {
+pub(crate) fn local_body_radius(layout: &[(&Component, f64)], axial: f64) -> Option<f64> {
     for (c, start) in layout {
         match c {
             Component::BodyTube(t) => {
@@ -788,34 +771,12 @@ fn tubefin_cp_pos(ar: f64, mach: f64) -> f64 {
     val
 }
 
-fn tubefin_equiv_finset(tf: &TubeFinSet, body_radius: f64) -> FinSet {
-    let r = tf.outer_radius.unwrap_or(body_radius).max(1e-4);
-    let mut common = Common::new("", "tube-fin-equiv");
-    common.material = tf.common.material.clone();
-    FinSet {
-        common,
-        fin_count: tf.fin_count.max(1),
-        root_chord: tf.length,
-        tip_chord: tf.length,
-        sweep_length: 0.0,
-        height: r,
-        thickness: tf.thickness.max(1e-4),
-        cant_angle: 0.0,
-        cross_section: FinCrossSection::Square,
-        shape: FinShape::Trapezoidal,
-        points: Vec::new(),
-        tab_length: 0.0,
-        tab_height: 0.0,
-        fillet_radius: 0.0,
-    }
-}
-
 /// Port of OpenRocket `FinSetCalc.calculateFinGeometry` strip integration
 /// for a freeform fin polygon `pts` (chord-x, span-y), span `s`. Returns
 /// (finArea, macLength, macLead, cosGamma) via 48 spanwise strips: at each
 /// y the polygon's min-x (chordLead) and max-x (chordTrail) define the
 /// local chord; MAC and mid-chord-sweep cosΓ follow exactly as OpenRocket.
-fn freeform_mac(pts: &[[f64; 2]], s: f64) -> (f64, f64, f64, f64) {
+pub(crate) fn freeform_mac(pts: &[[f64; 2]], s: f64) -> (f64, f64, f64, f64) {
     const DIV: usize = 48;
     if s <= 0.0 || pts.len() < 3 {
         return (0.0, 0.0, 0.0, 1.0);
@@ -1018,30 +979,31 @@ fn fins_cn_alpha(f: &FinSet, body_radius: f64, area_ref: f64, mach: f64) -> (f64
 ///
 /// We use a fixed pipe roughness ε = 60 µm (matches Java's default
 /// "Normal" finish) and `stagnationCD ≈ 1` for low Mach.
-fn tube_internal_pressure_cd(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn tube_internal_pressure_cd(
     outer_r: f64,
     inner_r: f64,
     length: f64,
-    fc: FlightConditions,
+    _mach: f64,
+    reynolds_per_m: f64,
+    stagnation: f64,
+    base: f64,
     area_ref: f64,
 ) -> f64 {
+    // Faithful TubeCalc.calculatePressureCD. `reynolds_per_m` = v/ν (= ρv/μ);
+    // OR's tube Reynolds uses the inner *diameter*, not length.
     if inner_r <= 0.0 || length <= 0.0 || area_ref <= 1e-12 {
         return 0.0;
     }
     let diameter = 2.0 * inner_r;
     let inner_area = PI * inner_r * inner_r;
     let frontal_area = PI * (outer_r * outer_r - inner_r * inner_r).max(0.0);
-    let epsilon = 60.0e-6_f64; // surface roughness
-    // Reynolds based on tube diameter and the rocket's current speed; we
-    // approximate v from fc.reynolds·length-equivalent.  fc.reynolds in our
-    // engine is ρ·v/ν (per unit length), so v·D/ν = fc.reynolds · D.
-    let re = (fc.reynolds * diameter).max(1.0e3);
+    let epsilon = 60.0e-6_f64; // OR uses tube.getFinish(); NORMAL default
+    let re = (reynolds_per_m * diameter).max(1.0e3);
     let term = epsilon / (3.7 * diameter) + 5.74 / re.powf(0.9);
     let log = term.log10();
     let f_factor = 0.25 / (log * log);
     let tube_cd = f_factor * length / diameter;
-    let stagnation = 1.0_f64; // M ≈ 0 stagnation Cd
-    let base = 0.12_f64;
     (tube_cd * inner_area + 0.7 * (stagnation + base) * frontal_area) / area_ref
 }
 
@@ -1235,7 +1197,14 @@ pub fn component_analysis(rocket: &Rocket, fc: FlightConditions) -> AnalysisRepo
                 row.kind = "LaunchLug".into();
                 row.cd_pressure = l.instance_count as f64
                     * tube_internal_pressure_cd(
-                        l.outer_radius, l.inner_radius, l.length, fc, area_ref,
+                        l.outer_radius,
+                        l.inner_radius,
+                        l.length,
+                        fc.mach,
+                        fc.reynolds,
+                        crate::aero_drag::stagnation_cd(fc.mach),
+                        crate::aero_drag::base_cd(fc.mach),
+                        area_ref,
                     );
             }
             _ => continue,
@@ -1284,6 +1253,8 @@ mod tests {
             aft_shoulder_thickness: 0.0,
             aft_shoulder_capped: false,
             is_flipped: false,
+            filled: false,
+            children: vec![],
         }));
         stage.children.push(Component::BodyTube(BodyTube {
             common: Common::new("b", "Body"),

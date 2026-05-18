@@ -58,6 +58,13 @@ fn rk4_freefall_matches_analytic() {
         body_lift_planform_term: 0.0,
         body_lift_cp: 0.0,
         pitch_damping_mul: 0.0,
+        gravity_model: opsrocket_core::gravity::GravityModel::Constant(G0),
+        geodetic: opsrocket_core::gravity::GeodeticComputation::Flat,
+        launch_site: opsrocket_core::gravity::WorldCoordinate::from_degrees(0.0, 0.0, 0.0),
+        launch_altitude: 0.0,
+        roll_forcing: 0.0,
+        roll_damp_coeff: 0.0,
+        pyr_seed: 0,
     };
     let mut s = State::at_rest(100.0, 1.0, 0.0);
     let dt = 0.01;
@@ -94,6 +101,13 @@ fn rk4_integrates_mass_loss_linearly() {
         body_lift_planform_term: 0.0,
         body_lift_cp: 0.0,
         pitch_damping_mul: 0.0,
+        gravity_model: opsrocket_core::gravity::GravityModel::Constant(G0),
+        geodetic: opsrocket_core::gravity::GeodeticComputation::Flat,
+        launch_site: opsrocket_core::gravity::WorldCoordinate::from_degrees(0.0, 0.0, 0.0),
+        launch_altitude: 0.0,
+        roll_forcing: 0.0,
+        roll_damp_coeff: 0.0,
+        pyr_seed: 0,
     };
     let mut s = State::at_rest(1000.0, 1.0, 0.0);
     for _ in 0..100 {

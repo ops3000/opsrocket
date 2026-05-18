@@ -12,7 +12,6 @@ use nalgebra::{Quaternion, UnitQuaternion, Vector3};
 use opsrocket_core::atmosphere::{AtmosphereModel, ExtendedIsa};
 use opsrocket_core::geom::Vec3;
 use opsrocket_core::mathx::pow2;
-use opsrocket_core::units::G0;
 
 /// Instantaneous rocket state.
 ///
@@ -43,13 +42,20 @@ pub struct State {
 
 impl State {
     pub fn at_rest(launch_altitude: f64, mass: f64, pitch_rad: f64) -> Self {
+        Self::at_rest_az(launch_altitude, mass, pitch_rad, 0.0)
+    }
+
+    /// As [`at_rest`] but with a launch-rod azimuth (radians, clockwise from
+    /// north / +Y). The rod is tilted `pitch_rad` from vertical, then rotated
+    /// to the requested azimuth about world +Z.
+    pub fn at_rest_az(launch_altitude: f64, mass: f64, pitch_rad: f64, azimuth_rad: f64) -> Self {
         // Convention: body Z-axis is the rocket's longitudinal "forward" axis.
         // At rest with pitch=0, body-Z aligns with world +Z (up). A non-zero
-        // launch pitch tilts the rocket about world +X (east axis).
-        let orientation = UnitQuaternion::from_axis_angle(
-            &Vector3::x_axis(),
-            pitch_rad,
-        );
+        // launch pitch tilts the rocket about world +X (east axis); the
+        // azimuth then spins that tilt direction about world +Z.
+        let tilt = UnitQuaternion::from_axis_angle(&Vector3::x_axis(), pitch_rad);
+        let yaw = UnitQuaternion::from_axis_angle(&Vector3::z_axis(), azimuth_rad);
+        let orientation = yaw * tilt;
         Self {
             t: 0.0,
             pos: Vector3::new(0.0, 0.0, launch_altitude),
@@ -110,6 +116,46 @@ pub struct ForceSampler<'a> {
     /// Java pitch-damping multiplier (constant per rocket geometry).
     /// Used as `Cm_damp = 3 · mul · (ω/V)²`.
     pub pitch_damping_mul: f64,
+    /// Gravity model (OpenRocket default WGS).
+    pub gravity_model: opsrocket_core::gravity::GravityModel,
+    /// Geodetic computation strategy (for gravity latitude + Coriolis).
+    pub geodetic: opsrocket_core::gravity::GeodeticComputation,
+    /// Launch-site world coordinate.
+    pub launch_site: opsrocket_core::gravity::WorldCoordinate,
+    /// Launch-site geometric altitude (m MSL); `State.pos.z` is absolute, so
+    /// the AGL delta fed to the geodetic model is `pos.z - launch_altitude`.
+    pub launch_altitude: f64,
+    /// Roll-forcing coefficient `Croll` from fin cant (per rad of cant,
+    /// already includes the cant): `CrollForce = (macSpan+r)·cna1·(1+τ)·δ
+    /// /refLen` summed over fin sets. Multiplied by q·S·L for the roll
+    /// moment.
+    pub roll_forcing: f64,
+    /// Roll-damping coefficient: `CrollDamp = Σ 2π·rollRate·rollSum /
+    /// (S·L·V·β)` ≈ `roll_damp_coeff · (rollRate/V)`; we store the
+    /// `roll_damp_coeff` (per fin geometry) and multiply by rollRate/V.
+    pub roll_damp_coeff: f64,
+    /// PITCH_YAW_RANDOM symmetry-breaking seed (per simulation).
+    pub pyr_seed: u64,
+}
+
+/// Deterministic ±`PITCH_YAW_RANDOM` perturbation as a function of the
+/// per-run seed and the (quantised) simulation time. OpenRocket draws this
+/// from a seeded `java.util.Random`; we use a deterministic hash so the
+/// trajectory is reproducible while still breaking perfect axial symmetry.
+fn pyr(seed: u64, t: f64, axis: u64) -> f64 {
+    // OpenRocket: ± PITCH_YAW_RANDOM, value = 2·(rand−0.5)·PITCH_YAW_RANDOM.
+    const PITCH_YAW_RANDOM: f64 = 0.0005;
+    let mut x = seed
+        ^ (t * 1.0e6) as i64 as u64
+        ^ axis.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    // splitmix64
+    x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = x;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    let r = (z >> 11) as f64 / (1u64 << 53) as f64; // [0,1)
+    PITCH_YAW_RANDOM * 2.0 * (r - 0.5)
 }
 
 impl ForceSampler<'_> {
@@ -143,10 +189,15 @@ impl ForceSampler<'_> {
         let cn_slender = self.cn_alpha * alpha;
         let cn_lift = self.body_lift_planform_term * alpha.sin() * alpha.sin();
         let cn_total = cn_slender + cn_lift;
-        let axial_drag_mag = q * self.cd * self.area_ref;
-        let induced_drag_mag = q * cn_total * alpha.sin().abs() * self.area_ref;
+        // OpenRocket force model: the axial drag is `CDaxial · q · S` where
+        // CDaxial = mul(α) · CD (BarrowmanDragCalculator.calculateAxialCD).
+        // The AOA-induced axial component is carried by the normal force
+        // CN projected onto the velocity, NOT a separate term — so there is
+        // no extra `CN·sinα` drag here (that would double-count).
+        let cdaxial = crate::aero_drag::axial_cd(alpha, self.cd);
+        let axial_drag_mag = q * cdaxial * self.area_ref;
         let drag_world = if v_rel_mag > 1.0e-6 {
-            -(axial_drag_mag + induced_drag_mag) * v_rel / v_rel_mag
+            -axial_drag_mag * v_rel / v_rel_mag
         } else {
             Vector3::zeros()
         };
@@ -162,9 +213,16 @@ impl ForceSampler<'_> {
         let thrust_mag = (self.thrust)(s.t);
         let thrust_world = thrust_mag * body_axis;
 
-        let gravity = Vector3::new(0.0, 0.0, -G0);
-        let force = thrust_world + drag_world + lift_world + gravity * s.mass;
-        let acc = force / s.mass.max(1e-6);
+        // ---- World position → gravity + Coriolis ----
+        // `add_coordinate(launchSite, rocketPosition)` where rocketPosition is
+        // the AGL-relative cartesian (x east, y north, z up).
+        let rel = Vec3::new(s.pos.x, s.pos.y, s.pos.z - self.launch_altitude);
+        let world = self.geodetic.add_coordinate(&self.launch_site, rel);
+        let g = self.gravity_model.gravity(&world);
+        let coriolis = self.geodetic.coriolis_acceleration(&world, s.vel);
+
+        let force = thrust_world + drag_world + lift_world;
+        let acc = force / s.mass.max(1e-6) + Vector3::new(0.0, 0.0, -g) + coriolis;
 
         // ---- Rotational dynamics ----
         // Slender-body CP and body-lift CP differ — combine their moments
@@ -176,7 +234,11 @@ impl ForceSampler<'_> {
         // forward-pointing body axis). Note `arm = CP_x − CG_x > 0` when
         // CP is aft of CG: the conventional sign for a stable rocket.
         let mut d_angular = Vector3::zeros();
-        if v_rel_mag > 1.0 && alpha > 1e-6 && perp_hat.norm_squared() > 1e-12 {
+        let i_rot = self.moment_of_inertia_rot.max(1e-9);
+        let i_long = self.moment_of_inertia_long.max(1e-9);
+        // OpenRocket always integrates rotation once the rod is cleared —
+        // no v>1 / α>1e-6 gate (that gate froze low-speed attitude).
+        if v_rel_mag > 1e-3 && perp_hat.norm_squared() > 1e-12 {
             // Force = −CN·q·S·perp_hat (Barrowman convention; see notes
             // above on lift_world).
             let n_slender = -q * cn_slender * self.area_ref;
@@ -189,7 +251,6 @@ impl ForceSampler<'_> {
             let torque_lift = r_lift.cross(&(n_lift * perp_hat));
             let torque_world = torque_slender + torque_lift;
             let torque_body = inverse_world_to_body(s) * torque_world;
-            let i_rot = self.moment_of_inertia_rot.max(1e-9);
             d_angular = Vector3::new(0.0, torque_body.y / i_rot, torque_body.z / i_rot);
             // Pitch damping: stand-in for Barrowman's pitch-damping moment.
             // The proper formula is C_mq · q · S · L · (ω L / V), where
@@ -221,6 +282,33 @@ impl ForceSampler<'_> {
                 let damp_z = -omega_z.signum() * damp_z_mag * q_s_l / i_rot;
                 d_angular += Vector3::new(0.0, damp_y, damp_z);
             }
+        }
+
+        // ---- Roll dynamics (was fully stubbed) ----
+        // OpenRocket: momZ = Croll·q·S·L; Croll = CrollForce − CrollDamp,
+        // CrollForce from fin cant, CrollDamp ∝ rollRate/V. Integrated about
+        // the body roll (x) axis using the longitudinal inertia.
+        // Roll aero is only meaningful while there is appreciable airspeed;
+        // the `/V` in CrollDamp is otherwise singular (OpenRocket bounds it
+        // via the roll-rate timestep limiters dt[3]/dt[4]).
+        if v_rel_mag > 1.0 {
+            let q_s_l = q * self.area_ref * self.reference_length;
+            let roll_rate = s.angular.x;
+            let c_roll_damp = self.roll_damp_coeff * roll_rate / v_rel_mag;
+            let c_roll = self.roll_forcing - c_roll_damp;
+            d_angular.x += c_roll * q_s_l / i_long;
+        }
+
+        // ---- PITCH_YAW_RANDOM symmetry breaking ----
+        // OpenRocket adds ±0.0005 to Cm and Cyaw every force evaluation so a
+        // perfectly axial launch still develops realistic dispersion.
+        if v_rel_mag > 1e-3 {
+            let q_s_l = q * self.area_ref * self.reference_length;
+            let dcm = pyr(self.pyr_seed, s.t, 1);
+            let dcy = pyr(self.pyr_seed, s.t, 2);
+            // Cm acts about body-y (pitch), Cyaw about body-z (yaw).
+            d_angular.y += dcm * q_s_l / i_rot;
+            d_angular.z += -dcy * q_s_l / i_rot;
         }
 
         // Quaternion derivative: dq/dt = 0.5 · q · ω_body

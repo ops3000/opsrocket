@@ -138,12 +138,22 @@ fn render_component(out: &mut String, depth: usize, c: &Component) {
         Component::BodyTube(b) => ("bodytube", Box::new(move |o, d| render_bodytube(o, d, b))),
         Component::Transition(t) => ("transition", Box::new(move |o, d| render_transition(o, d, t))),
         Component::InnerTube(i) => ("innertube", Box::new(move |o, d| render_innertube(o, d, i))),
-        Component::FinSet(f) => ("trapezoidfinset", Box::new(move |o, d| render_finset(o, d, f))),
+        Component::FinSet(f) => (
+            match f.shape {
+                opsrocket_core::component::FinShape::Freeform => "freeformfinset",
+                opsrocket_core::component::FinShape::Elliptical => "ellipticalfinset",
+                opsrocket_core::component::FinShape::Trapezoidal => "trapezoidfinset",
+            },
+            Box::new(move |o, d| render_finset(o, d, f)),
+        ),
         Component::MassObject(m) => ("masscomponent", Box::new(move |o, d| render_mass(o, d, m))),
         Component::Parachute(p) => ("parachute", Box::new(move |o, d| render_parachute(o, d, p))),
         Component::ShockCord(s) => ("shockcord", Box::new(move |o, d| render_shockcord(o, d, s))),
         Component::LaunchLug(l) => ("launchlug", Box::new(move |o, d| render_launchlug(o, d, l))),
-        Component::CenteringRing(r) => ("centeringring", Box::new(move |o, d| render_centeringring(o, d, r))),
+        Component::CenteringRing(r) => (
+            if r.solid { "bulkhead" } else { "centeringring" },
+            Box::new(move |o, d| render_centeringring(o, d, r)),
+        ),
         Component::PodSet(p) => ("podset", Box::new(move |o, d| render_podset(o, d, p))),
         Component::TubeFinSet(t) => {
             ("tubefinset", Box::new(move |o, d| render_tubefinset(o, d, t)))
@@ -248,7 +258,12 @@ fn render_nosecone(out: &mut String, d: usize, n: &opsrocket_core::component::No
     push_text(out, d, "shape", nose_shape_str(n.shape));
     push_text(out, d, "shapeparameter", &n.shape_parameter.to_string());
     push_text(out, d, "length", &n.length.to_string());
-    push_text(out, d, "thickness", &n.thickness.to_string());
+    if n.filled {
+        // Parser convention: `<thickness>filled</thickness>` ⇒ solid nose.
+        push_text(out, d, "thickness", "filled");
+    } else {
+        push_text(out, d, "thickness", &n.thickness.to_string());
+    }
     push_text(out, d, "aftradius", &n.aft_radius.to_string());
     if n.aft_shoulder_length > 0.0 {
         push_text(out, d, "aftshoulderradius", &n.aft_shoulder_radius.to_string());
@@ -257,6 +272,21 @@ fn render_nosecone(out: &mut String, d: usize, n: &opsrocket_core::component::No
         push_text(out, d, "aftshouldercapped", if n.aft_shoulder_capped { "true" } else { "false" });
     }
     push_text(out, d, "isflipped", if n.is_flipped { "true" } else { "false" });
+    render_subcomponents(out, d, &n.children);
+}
+
+/// Emit a `<subcomponents>` block if there are nested children.
+fn render_subcomponents(out: &mut String, d: usize, children: &[Component]) {
+    if children.is_empty() {
+        return;
+    }
+    indent(out, d);
+    out.push_str("<subcomponents>\n");
+    for child in children {
+        render_component(out, d + 1, child);
+    }
+    indent(out, d);
+    out.push_str("</subcomponents>\n");
 }
 
 fn render_bodytube(out: &mut String, d: usize, b: &opsrocket_core::component::BodyTube) {
@@ -285,7 +315,12 @@ fn render_transition(out: &mut String, d: usize, t: &opsrocket_core::component::
     push_text(out, d, "length", &t.length.to_string());
     push_text(out, d, "foreradius", &t.fore_radius.to_string());
     push_text(out, d, "aftradius", &t.aft_radius.to_string());
-    push_text(out, d, "thickness", &t.thickness.to_string());
+    if t.filled {
+        push_text(out, d, "thickness", "filled");
+    } else {
+        push_text(out, d, "thickness", &t.thickness.to_string());
+    }
+    render_subcomponents(out, d, &t.children);
 }
 
 fn render_innertube(out: &mut String, d: usize, i: &opsrocket_core::component::InnerTube) {
@@ -293,17 +328,98 @@ fn render_innertube(out: &mut String, d: usize, i: &opsrocket_core::component::I
     push_text(out, d, "length", &i.length.to_string());
     push_text(out, d, "outerradius", &i.outer_radius.to_string());
     push_text(out, d, "innerradius", &i.inner_radius.to_string());
+    if i.cluster_count > 1 {
+        // Emit the canonical cluster name that `cluster_count()` re-parses
+        // back to the same count.
+        let name = match i.cluster_count {
+            2 => "double",
+            3 => "3-ring",
+            4 => "4-ring",
+            5 => "5-ring",
+            6 => "6-ring",
+            7 => "6-star",
+            9 => "9-grid",
+            10 => "9-star",
+            _ => "single",
+        };
+        push_text(out, d, "clusterconfiguration", name);
+    }
+    if let Some(mm) = &i.motor_mount {
+        render_motor_mount(out, d, mm);
+    }
+    render_subcomponents(out, d, &i.children);
+}
+
+fn render_motor_mount(
+    out: &mut String,
+    d: usize,
+    mm: &opsrocket_core::component::MotorMount,
+) {
+    indent(out, d);
+    out.push_str("<motormount>\n");
+    let ie = match mm.ignition_event {
+        opsrocket_core::component::IgnitionEvent::Automatic => "automatic",
+        opsrocket_core::component::IgnitionEvent::Launch => "launch",
+        opsrocket_core::component::IgnitionEvent::Burnout => "burnout",
+        opsrocket_core::component::IgnitionEvent::Ejection => "ejection",
+        opsrocket_core::component::IgnitionEvent::LowerStageSeparation => {
+            "lower_stage_separation"
+        }
+    };
+    push_text(out, d + 1, "ignitionevent", ie);
+    push_text(out, d + 1, "ignitiondelay", &mm.ignition_delay.to_string());
+    push_text(out, d + 1, "overhang", &mm.overhang.to_string());
+    for a in &mm.motors {
+        indent(out, d + 1);
+        out.push_str(&format!(
+            "<motor configid=\"{}\">\n",
+            xml_escape(&a.config_id)
+        ));
+        if let Some(des) = &a.designation {
+            push_text(out, d + 2, "designation", des);
+        }
+        if let Some(dig) = &a.digest {
+            push_text(out, d + 2, "digest", dig);
+        }
+        indent(out, d + 1);
+        out.push_str("</motor>\n");
+    }
+    indent(out, d);
+    out.push_str("</motormount>\n");
 }
 
 fn render_finset(out: &mut String, d: usize, f: &opsrocket_core::component::FinSet) {
     render_common(out, d, &f.common);
     push_text(out, d, "fincount", &f.fin_count.to_string());
-    push_text(out, d, "rootchord", &f.root_chord.to_string());
-    push_text(out, d, "tipchord", &f.tip_chord.to_string());
-    push_text(out, d, "sweeplength", &f.sweep_length.to_string());
-    push_text(out, d, "height", &f.height.to_string());
+    if matches!(f.shape, opsrocket_core::component::FinShape::Freeform)
+        && f.points.len() >= 2
+    {
+        indent(out, d);
+        out.push_str("<finpoints>\n");
+        for p in &f.points {
+            indent(out, d + 1);
+            out.push_str(&format!("<point x=\"{}\" y=\"{}\"/>\n", p[0], p[1]));
+        }
+        indent(out, d);
+        out.push_str("</finpoints>\n");
+    } else {
+        push_text(out, d, "rootchord", &f.root_chord.to_string());
+        push_text(out, d, "tipchord", &f.tip_chord.to_string());
+        push_text(out, d, "sweeplength", &f.sweep_length.to_string());
+        push_text(out, d, "height", &f.height.to_string());
+    }
     push_text(out, d, "thickness", &f.thickness.to_string());
-    push_text(out, d, "cant", &f.cant_angle.to_string());
+    // OpenRocket stores <cant> in degrees; loader multiplies by π/180.
+    push_text(out, d, "cant", &f.cant_angle.to_degrees().to_string());
+    if f.tab_length > 0.0 {
+        push_text(out, d, "tablength", &f.tab_length.to_string());
+    }
+    if f.tab_height > 0.0 {
+        push_text(out, d, "tabheight", &f.tab_height.to_string());
+    }
+    if f.fillet_radius > 0.0 {
+        push_text(out, d, "filletradius", &f.fillet_radius.to_string());
+    }
     let cs = match f.cross_section {
         opsrocket_core::component::FinCrossSection::Square => "square",
         opsrocket_core::component::FinCrossSection::Rounded => "rounded",
@@ -375,9 +491,23 @@ fn render_tubefinset(out: &mut String, d: usize, t: &opsrocket_core::component::
 fn render_centeringring(out: &mut String, d: usize, r: &opsrocket_core::component::CenteringRing) {
     render_common(out, d, &r.common);
     push_text(out, d, "length", &r.length.to_string());
-    push_text(out, d, "outerradius", &r.outer_radius.to_string());
-    push_text(out, d, "innerradius", &r.inner_radius.to_string());
+    // outer_radius == 0.0 is the parser's "auto" sentinel.
+    if r.outer_radius == 0.0 {
+        push_text(out, d, "outerradius", "auto");
+    } else {
+        push_text(out, d, "outerradius", &r.outer_radius.to_string());
+    }
+    if r.thickness_set {
+        // The bore is derived from `<thickness>` (engine block / coupler);
+        // emitting innerradius here would defeat that derivation.
+        push_text(out, d, "thickness", &r.thickness.to_string());
+    } else if r.inner_radius == 0.0 {
+        push_text(out, d, "innerradius", "auto");
+    } else {
+        push_text(out, d, "innerradius", &r.inner_radius.to_string());
+    }
     push_text(out, d, "instancecount", &r.instance_count.to_string());
+    render_subcomponents(out, d, &r.children);
 }
 
 fn render_simulations(out: &mut String, sims: &[CachedSimulation]) {
@@ -397,10 +527,21 @@ fn render_simulations(out: &mut String, sims: &[CachedSimulation]) {
         }
         push_text(out, 4, "launchrodlength", &s.launch_rod_length.to_string());
         push_text(out, 4, "launchrodangle", &s.launch_rod_angle.to_string());
+        push_text(
+            out,
+            4,
+            "launchroddirection",
+            &s.launch_rod_direction.to_degrees().to_string(),
+        );
         push_text(out, 4, "launchaltitude", &s.launch_altitude.to_string());
         push_text(out, 4, "launchtemperature", &s.launch_temperature.to_string());
         push_text(out, 4, "launchpressure", &s.launch_pressure.to_string());
+        push_text(out, 4, "launchlatitude", &s.launch_latitude.to_string());
+        push_text(out, 4, "launchlongitude", &s.launch_longitude.to_string());
+        push_text(out, 4, "geodeticmethod", &s.geodetic_method);
         push_text(out, 4, "windaverage", &s.wind_average.to_string());
+        push_text(out, 4, "windturbulence", &s.wind_turbulence.to_string());
+        push_text(out, 4, "winddirection", &s.wind_direction.to_string());
         push_text(out, 4, "timestep", &s.time_step.to_string());
         push_text(out, 4, "maxtime", &s.max_time.to_string());
         indent(out, 3);

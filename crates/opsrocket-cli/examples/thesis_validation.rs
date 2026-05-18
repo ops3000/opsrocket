@@ -33,6 +33,8 @@ fn thesis_rocket(empty_mass_override: f64) -> Rocket {
         aft_shoulder_thickness: 0.0,
         aft_shoulder_capped: false,
         is_flipped: false,
+        filled: false,
+        children: vec![],
     };
 
     // Motor-mount inner tube (18 mm Estes motor in a 29 mm body).
@@ -52,6 +54,8 @@ fn thesis_rocket(empty_mass_override: f64) -> Rocket {
                 ejection_delay: 3.0,
             }],
         }),
+        children: vec![],
+        cluster_count: 1,
     };
 
     // Simple trapezoidal fins, typical for a 29 mm sport rocket.
@@ -69,6 +73,9 @@ fn thesis_rocket(empty_mass_override: f64) -> Rocket {
         cross_section: FinCrossSection::Square, // "left rectangular" per thesis
         shape: Default::default(),
         points: Vec::new(),
+        tab_length: 0.0,
+        tab_height: 0.0,
+        fillet_radius: 0.0,
     };
 
     // Body tube: 56 cm total − 10 cm nose = 46 cm. Apply the measured
@@ -115,7 +122,13 @@ fn run(designation: &str, ejection: f64, empty_mass: f64) -> f64 {
         launch_altitude: 0.0,
         launch_temperature: 288.15,
         launch_pressure: 101_325.0,
+        launch_latitude: 28.61,
+        launch_longitude: 0.0,
+        geodetic_method: "spherical".into(),
+        launch_rod_direction: 0.0,
         wind_average: 0.0, // calm; thesis flights were low-wind
+        wind_turbulence: 0.1,
+        wind_direction: std::f64::consts::FRAC_PI_2,
         time_step: 0.05,
         max_time: 60.0,
         cached: None,

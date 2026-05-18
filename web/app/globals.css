@@ -31,6 +31,30 @@
 html {
   scroll-behavior: smooth;
 }
+
+/* Themed scrollbars instead of the chunky OS default. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 6px;
+  border: 2px solid var(--bg);
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
 body {
   background: var(--bg);
   color: var(--ink);
@@ -58,13 +82,10 @@ body {
   font-family: var(--font-mono), ui-monospace, monospace;
 }
 
-/* The ops.png mark is dark — recolour it solid pink via an alpha mask so
-   it reads on the dark backgrounds. */
+/* ops.png is now baked pink — used as a plain <img>, no mask hack. */
 .ops-logo {
   display: inline-block;
-  background-color: #ec4899;
-  -webkit-mask: url("/ops.png") center / contain no-repeat;
-  mask: url("/ops.png") center / contain no-repeat;
+  object-fit: contain;
 }
 
 /* Blueprint hero: fine + coarse drafting grid, radial-masked. */

@@ -14,9 +14,12 @@ pub mod atmosphere;
 pub mod component;
 pub mod geom;
 pub mod gravity;
+pub mod interp;
 pub mod material;
 pub mod mathx;
 pub mod profile;
+pub mod rigidbody;
+pub mod wind;
 pub mod units;
 
 pub use component::{

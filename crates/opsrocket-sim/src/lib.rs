@@ -9,6 +9,7 @@
 //!             handling events (burnout, apogee, recovery deployment).
 
 pub mod aero;
+pub mod aero_drag;
 pub mod engine;
 pub mod events;
 pub mod flight;

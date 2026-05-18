@@ -112,7 +112,7 @@ export function HeroSideviews() {
   }, []);
 
   return (
-    <div className="hidden lg:flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
       {items.length === 0
         ? FILES.map((f) => (
             <div key={f.ork} className="card px-5 py-4">

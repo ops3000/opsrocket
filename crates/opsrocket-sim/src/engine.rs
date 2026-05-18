@@ -19,8 +19,10 @@
 use std::path::Path;
 
 use opsrocket_core::atmosphere::{AtmosphereModel, ExtendedIsa};
+use opsrocket_core::gravity::{GeodeticComputation, GravityModel, WorldCoordinate};
 use opsrocket_core::component::{Component, IgnitionEvent, MotorAssignment, Rocket, SeparationEvent};
-use opsrocket_core::geom::Vec3;
+use opsrocket_core::geom::{Coord, Vec3};
+use opsrocket_core::rigidbody::RigidBody;
 use opsrocket_core::units::{G0, PI};
 use opsrocket_io::motor::{ThrustCurve, parse_rasp};
 use opsrocket_io::OrkDocument;
@@ -35,6 +37,10 @@ const MIN_TIME_STEP: f64 = 0.001;
 const MAX_ANGLE_STEP: f64 = 3.0 * std::f64::consts::PI / 180.0;
 /// Maximum pitch/yaw angular-velocity change per step (Java = 4°).
 const MAX_PITCH_YAW_CHANGE: f64 = 4.0 * std::f64::consts::PI / 180.0;
+/// Java RK4SimulationStepper.MAX_ROLL_STEP_ANGLE = 2·28.32°.
+const MAX_ROLL_STEP_ANGLE: f64 = 2.0 * 28.32 * std::f64::consts::PI / 180.0;
+/// Java RK4SimulationStepper.MAX_ROLL_RATE_CHANGE = 2°.
+const MAX_ROLL_RATE_CHANGE: f64 = 2.0 * std::f64::consts::PI / 180.0;
 
 #[derive(Debug, Clone)]
 pub struct SimulationOptions {
@@ -47,8 +53,27 @@ pub struct SimulationOptions {
     pub launch_pressure: f64,
     /// Launch-site relative humidity [0,1]. OpenRocket default 0.
     pub launch_relative_humidity: f64,
+    /// Launch-site latitude (degrees). OpenRocket preference default 28.61.
+    pub launch_latitude: f64,
+    /// Launch-site longitude (degrees). OpenRocket default 0.
+    pub launch_longitude: f64,
+    /// Geodetic computation strategy (OpenRocket default Spherical).
+    pub geodetic: GeodeticComputation,
+    /// Gravity model (OpenRocket default WGS).
+    pub gravity_model: GravityModel,
+    /// Launch rod / guide length (m) — drives the dt[6] timestep limit and
+    /// rail-clearance event.
+    pub launch_rod_length: f64,
+    /// Launch rod azimuth (radians, clockwise from north).
+    pub launch_azimuth_rad: f64,
     pub launch_pitch_deg: f64,
     pub wind_average: f64,
+    /// Wind turbulence intensity (σ/mean). OpenRocket default 0.1.
+    pub wind_turbulence: f64,
+    /// Wind direction (radians). OpenRocket default π/2 (an "east wind").
+    pub wind_direction: f64,
+    /// Pink-noise RNG seed.
+    pub wind_seed: i64,
     pub motor: Option<MotorChoice>,
 }
 
@@ -63,6 +88,15 @@ impl SimulationOptions {
             self.launch_temperature,
             self.launch_pressure,
             self.launch_relative_humidity,
+        )
+    }
+
+    /// Launch-site world coordinate (`conditions.setLaunchSite(...)`).
+    pub fn launch_site(&self) -> WorldCoordinate {
+        WorldCoordinate::from_degrees(
+            self.launch_latitude,
+            self.launch_longitude,
+            self.launch_altitude,
         )
     }
 }
@@ -84,8 +118,17 @@ impl Default for SimulationOptions {
             launch_temperature: 288.15,
             launch_pressure: 101_325.0,
             launch_relative_humidity: 0.0,
+            launch_latitude: 28.61,
+            launch_longitude: 0.0,
+            geodetic: GeodeticComputation::Spherical,
+            gravity_model: GravityModel::Wgs,
+            launch_rod_length: 1.0,
+            launch_azimuth_rad: 0.0,
             launch_pitch_deg: 0.0,
             wind_average: 0.0,
+            wind_turbulence: 0.1,
+            wind_direction: std::f64::consts::FRAC_PI_2,
+            wind_seed: 0,
             motor: None,
         }
     }
@@ -191,6 +234,23 @@ pub(crate) fn motor_mount_axial_position(rocket: &Rocket, config_id: &str) -> Op
         }
     }
     None
+}
+
+/// Number of physical motors at the mount for `config_id` — the inner
+/// tube's `<clusterconfiguration>` count (1 for a single motor). Used to
+/// sum clustered-motor thrust and mass (`MotorClusterState`).
+pub(crate) fn motor_cluster_count(rocket: &Rocket, config_id: &str) -> u32 {
+    let layout = crate::mass::iter_layout(rocket);
+    for (c, _ax) in &layout {
+        if let Component::InnerTube(it) = c {
+            if let Some(m) = it.motor_mount.as_ref() {
+                if m.motors.iter().any(|a| a.config_id == config_id) {
+                    return it.cluster_count.max(1);
+                }
+            }
+        }
+    }
+    1
 }
 
 fn motor_assignment_in_component_with_event(
@@ -383,8 +443,21 @@ pub fn simulate_with(
         launch_temperature: sim.launch_temperature,
         launch_pressure: sim.launch_pressure,
         launch_relative_humidity: 0.0,
+        launch_latitude: sim.launch_latitude,
+        launch_longitude: sim.launch_longitude,
+        geodetic: match sim.geodetic_method.as_str() {
+            "flat" => GeodeticComputation::Flat,
+            "wgs84" => GeodeticComputation::Wgs84,
+            _ => GeodeticComputation::Spherical,
+        },
+        gravity_model: GravityModel::Wgs,
+        launch_rod_length: sim.launch_rod_length.max(0.0),
+        launch_azimuth_rad: sim.launch_rod_direction,
         launch_pitch_deg: sim.launch_rod_angle.to_degrees(),
         wind_average: sim.wind_average,
+        wind_turbulence: sim.wind_turbulence,
+        wind_direction: sim.wind_direction,
+        wind_seed: 0,
         motor: motors_dir.map(|d| MotorChoice::Designation {
             designation: String::new(),
             search_dir: Some(d.to_path_buf()),
@@ -411,8 +484,23 @@ pub fn simulate_with(
                     }
                 };
                 let want_digest = assignment.digest.as_deref();
-                let found = find_motor_curve(designation, want_digest)
-                    .map(|curve| (curve, *ignition));
+                let count = motor_cluster_count(&doc.rocket, &assignment.config_id);
+                let found = find_motor_curve(designation, want_digest).map(|mut curve| {
+                    if count > 1 {
+                        // Clustered motors: N identical motors fire together —
+                        // thrust, impulse and mass scale by N (MotorClusterState).
+                        let n = count as f64;
+                        for p in curve.points.iter_mut() {
+                            p.thrust *= n;
+                        }
+                        for m in curve.mass.iter_mut() {
+                            *m *= n;
+                        }
+                        curve.total_mass *= n;
+                        curve.propellant_mass *= n;
+                    }
+                    (curve, *ignition)
+                });
                 stage_curves.push(found);
             }
             None => stage_curves.push(None),
@@ -430,7 +518,20 @@ pub fn simulate_with(
         .iter()
         .map(|entry| entry.as_ref().and_then(|(a, _)| motor_mount_axial_position(&doc.rocket, &a.config_id)))
         .collect();
-    run_multistage(&doc.rocket, &opts, &mass_props, total_mass_initial, stage_curves, motor_positions)
+    // Per-stage motor ejection-charge delay (for EJECTION recovery timing).
+    let stage_ejection_delay: Vec<f64> = per_stage
+        .iter()
+        .map(|e| e.as_ref().map(|(a, _)| a.ejection_delay).unwrap_or(0.0))
+        .collect();
+    run_multistage(
+        &doc.rocket,
+        &opts,
+        &mass_props,
+        total_mass_initial,
+        stage_curves,
+        motor_positions,
+        stage_ejection_delay,
+    )
 }
 
 /// Multi-stage simulation driver.  Treats `stage_curves` as the per-stage
@@ -445,6 +546,7 @@ fn run_multistage(
     initial_mass: f64,
     stage_curves: Vec<Option<(ThrustCurve, IgnitionEvent)>>,
     motor_positions: Vec<Option<f64>>,
+    stage_ejection_delay: Vec<f64>,
 ) -> Result<SimulationResult> {
     let n = rocket.stages.len();
     // Whether each stage is currently attached.
@@ -466,15 +568,24 @@ fn run_multistage(
     // Single-stage fallback to the original path if nothing else is set up.
     // (Maintains the previous behaviour for unstaged rockets.)
     let aero_rocket = rocket.clone();
+    let (roll_forcing_c, roll_damp_c) = crate::aero::fin_roll_coeffs(&aero_rocket);
 
     let atmosphere = opts.atmosphere();
     let pitch_rad = opts.launch_pitch_deg.to_radians();
-    let mut state = State::at_rest(opts.launch_altitude, initial_mass.max(0.001), pitch_rad);
+    let mut state = State::at_rest_az(opts.launch_altitude, initial_mass.max(0.001), pitch_rad, opts.launch_azimuth_rad);
 
-    // Java convention (`PinkNoiseWindModel`): an "east wind" (direction = π/2)
-    // means wind blowing FROM east TOWARDS west, i.e. the wind velocity
-    // vector points in -X. So a positive average speed gives a -X velocity.
-    let wind = Vec3::new(-opts.wind_average, 0.0, 0.0);
+    // Faithful pink-noise turbulent wind (PinkNoiseWindModel). OpenRocket
+    // returns the air-velocity vector and computes airspeed = vel + wind;
+    // opsrocket uses v_rel = vel − wind, so we negate OR's vector.
+    let mut wind_model = opsrocket_core::wind::PinkNoiseWindModel::new(opts.wind_seed);
+    wind_model.set_average(opts.wind_average);
+    wind_model.set_direction(opts.wind_direction);
+    wind_model.set_turbulence_intensity(opts.wind_turbulence);
+    fn sample_wind(wm: &mut opsrocket_core::wind::PinkNoiseWindModel, t: f64) -> Vec3 {
+        let (wx, wy, _) = wm.wind_velocity(t.max(0.0));
+        Vec3::new(-wx, -wy, 0.0)
+    }
+    let mut wind = sample_wind(&mut wind_model, 0.0);
 
     // Adaptive RK4 timestep (Java RK4SimulationStepper). `dt` now varies per
     // step; `user_dt` is the configured base step.
@@ -490,6 +601,8 @@ fn run_multistage(
     let mut result = SimulationResult::default();
     let mut deployed = false;
     let mut deploy_time = -1.0;
+    let mut tumbling = false;
+    let tumble_area = tumble_drag_area(rocket);
     let mut apogee_time = -1.0;
     let mut prev_vz = 0.0;
     let mut prev_speed = 0.0;
@@ -560,6 +673,46 @@ fn run_multistage(
         (sum_mass, cg)
     }
 
+    /// Aggregate motor rigid body (mass + filled-cylinder MOI at each
+    /// motor's axial CG) — `MassCalculation.calculateMountData`. Motor unit
+    /// inertias: rotational (roll) = r²/2, longitudinal (pitch) = (3r²+L²)/12
+    /// (`Inertia.filledCylinder*`).
+    fn motor_rigid_body(
+        t: f64,
+        stage_curves: &[Option<(ThrustCurve, IgnitionEvent)>],
+        attached: &[bool],
+        ignition_time: &[Option<f64>],
+        motor_positions: &[Option<f64>],
+    ) -> RigidBody {
+        let mut acc: Option<RigidBody> = None;
+        for i in 0..stage_curves.len() {
+            if !attached[i] {
+                continue;
+            }
+            if let Some((curve, _)) = stage_curves[i].as_ref() {
+                let elapsed = ignition_time[i].map(|t0| t - t0).unwrap_or(0.0);
+                let prop_remaining = curve.propellant_mass_at(elapsed);
+                let casing = curve.total_mass - curve.propellant_mass;
+                let m = casing + prop_remaining;
+                if m <= 1e-12 {
+                    continue;
+                }
+                let r = 0.5 * curve.diameter_m;
+                let l = curve.length_m;
+                // Place the motor mass at mountStart + motor CG-x(t).
+                let cgx = motor_positions[i].unwrap_or(0.0);
+                let ixx = m * r * r / 2.0;
+                let it = m * (3.0 * r * r + l * l) / 12.0;
+                let body = RigidBody::new(Coord::new_w(cgx, 0.0, 0.0, m), ixx, it, it);
+                acc = Some(match acc {
+                    Some(a) => a.add(&body),
+                    None => body,
+                });
+            }
+        }
+        acc.unwrap_or(RigidBody::EMPTY)
+    }
+
     // Push initial state
     {
         let stage_mass = mass_properties_for_stages_active(rocket, &attached);
@@ -590,6 +743,7 @@ fn run_multistage(
     }
 
     while state.t < opts.max_time {
+        wind = sample_wind(&mut wind_model, state.t);
         let stage_mass = mass_properties_for_stages_active(rocket, &attached);
         let motor_mass = motor_mass_now(state.t, &stage_curves, &attached, &ignition_time);
         state.mass = (stage_mass.mass + motor_mass).max(1.0e-6);
@@ -600,8 +754,18 @@ fn run_multistage(
         // parachute's Cd·A_canopy / refArea on deployment — no opening
         // shock ramp.  Match that behaviour.
         let _ = deploy_time;
-        let active_cd = if deployed { 0.0 } else { cd_now };
-        let active_area = if deployed { chute_drag_factor } else { area_ref };
+        // A recovery device (parachute) or a tumbling no-recovery descent
+        // both replace the normal aero with a high-drag Cd·A.
+        let recovery_active = deployed || tumbling;
+        let recovery_area = if deployed {
+            chute_drag_factor
+        } else if tumbling {
+            tumble_area
+        } else {
+            area_ref
+        };
+        let active_cd = if recovery_active { 0.0 } else { cd_now };
+        let active_area = if recovery_active { recovery_area } else { area_ref };
 
         // Build a fresh thrust + mass_dot closure for this step. Both
         // capture only by reference for safety.
@@ -661,20 +825,51 @@ fn run_multistage(
             atmosphere: &atmosphere,
             wind,
             thrust: &thrust_fn,
-            cd: if deployed { 1.0 } else { active_cd },
-            area_ref: if deployed { active_area } else { area_ref },
+            cd: if recovery_active { 1.0 } else { active_cd },
+            area_ref: if recovery_active { active_area } else { area_ref },
             mass_dot: &mass_dot_fn,
-            cn_alpha: if deployed { 0.0 } else { cn_alpha_now },
+            cn_alpha: if recovery_active { 0.0 } else { cn_alpha_now },
             reference_length: aero0.reference_length,
             cp_axial: cp_now,
             cg_axial: total_cg,
-            moment_of_inertia_rot: stage_mass.i_rot.max(1e-9),
-            moment_of_inertia_long: stage_mass.i_long.max(1e-9),
-            body_lift_planform_term: if deployed { 0.0 } else { body_lift.planform_term },
+            moment_of_inertia_rot: {
+                let s_rb = RigidBody::new(
+                    Coord::new_w(stage_mass.cg_axial, 0.0, 0.0, stage_mass.mass),
+                    stage_mass.i_long,
+                    stage_mass.i_rot,
+                    stage_mass.i_rot,
+                );
+                let m_rb = motor_rigid_body(
+                    state.t, &stage_curves, &attached, &ignition_time, &motor_positions,
+                );
+                let rb = if m_rb.mass() > 1e-9 { s_rb.add(&m_rb) } else { s_rb };
+                rb.iyy.max(1e-9)
+            },
+            moment_of_inertia_long: {
+                let s_rb = RigidBody::new(
+                    Coord::new_w(stage_mass.cg_axial, 0.0, 0.0, stage_mass.mass),
+                    stage_mass.i_long,
+                    stage_mass.i_rot,
+                    stage_mass.i_rot,
+                );
+                let m_rb = motor_rigid_body(
+                    state.t, &stage_curves, &attached, &ignition_time, &motor_positions,
+                );
+                let rb = if m_rb.mass() > 1e-9 { s_rb.add(&m_rb) } else { s_rb };
+                rb.ixx.max(1e-9)
+            },
+            body_lift_planform_term: if recovery_active { 0.0 } else { body_lift.planform_term },
             body_lift_cp: body_lift.planform_cp,
-            pitch_damping_mul: if deployed { 0.0 } else {
+            pitch_damping_mul: if recovery_active { 0.0 } else {
                 crate::aero::pitch_damping_coefficient(&aero_rocket, total_cg)
             },
+            gravity_model: opts.gravity_model,
+            geodetic: opts.geodetic,
+            launch_site: opts.launch_site(),
+            launch_altitude: opts.launch_altitude,
+            roll_forcing: roll_forcing_c,
+            roll_damp_coeff: roll_damp_c,
+            pyr_seed: 0x23E3_A01F,
         };
 
         // ---- Adaptive timestep (Java RK4SimulationStepper) ----
@@ -703,6 +898,27 @@ fn run_multistage(
             } else {
                 f64::MAX
             };
+            // dt[3]: max roll-step angle / |rollRate|.
+            let roll_rate = state.angular.x.abs();
+            let dt_roll = if roll_rate > 1e-6 {
+                MAX_ROLL_STEP_ANGLE / roll_rate
+            } else {
+                f64::MAX
+            };
+            // dt[4]: max roll-rate change / |roll angular accel|.
+            let roll_acc = probe.d_angular.x.abs();
+            let dt_roll_rate = if roll_acc > 1e-6 {
+                MAX_ROLL_RATE_CHANGE / roll_acc
+            } else {
+                f64::MAX
+            };
+            // dt[6]: 1/10 of the launch-rod traversal time while on the rod.
+            let v_mag = state.vel.norm();
+            let dt_rod = if on_rail && v_mag > 1e-6 {
+                opts.launch_rod_length / v_mag / 10.0
+            } else {
+                f64::MAX
+            };
             // dt[7]: at most 1.5× the previous step.
             let dt_growth = 1.5 * dt;
             // Event-proximity clamp: land exactly on the next scheduled
@@ -725,6 +941,9 @@ fn run_multistage(
             let mut chosen = base
                 .min(dt_angle)
                 .min(dt_rot)
+                .min(dt_roll)
+                .min(dt_roll_rate)
+                .min(dt_rod)
                 .min(dt_growth)
                 .min(max_to_event);
             if (max_to_event - chosen).abs() < min_dt && max_to_event < f64::MAX {
@@ -735,6 +954,17 @@ fn run_multistage(
 
         let next = rk4_step(&state, dt, &sampler);
         let mut next = State { mass: next.mass.max(1.0e-6), ..next };
+
+        // Range / NaN guard — Java RK4SimulationStepper throws
+        // SimulationCalculationException if values run away or go NaN; we
+        // end the trajectory cleanly at the last good state instead.
+        if !next.pos.iter().all(|v| v.is_finite())
+            || !next.vel.iter().all(|v| v.is_finite())
+            || next.vel.norm_squared() > 1.0e18
+            || next.pos.norm_squared() > 1.0e18
+        {
+            break;
+        }
 
         // On-rail constraint: while sliding up the launch rod, the rocket
         // is constrained to move along the rod direction only and cannot
@@ -810,10 +1040,47 @@ fn run_multistage(
             let t_apogee = state.t + dt * frac;
             apogee_time = t_apogee;
             result.events.push((t_apogee, "APOGEE".to_string()));
-            if !deployed && parachute_count(rocket) > 0 {
-                deployed = true;
-                deploy_time = t_apogee;
-                result.events.push((t_apogee, "RECOVERY_DEVICE_DEPLOYMENT".to_string()));
+        }
+
+        // Recovery deployment per each device's DeploymentConfiguration
+        // (apogee / altitude / ejection-charge / launch + deploy delay),
+        // replacing the old hardwired apogee→parachute behaviour.
+        if !deployed && parachute_count(rocket) > 0 {
+            let agl = next.pos.z - opts.launch_altitude;
+            let descending = next.vel.z <= 0.0;
+            let mut ejection_time = -1.0_f64;
+            for i in 0..n {
+                if let Some(bt) = burnout_time[i] {
+                    ejection_time = ejection_time
+                        .max(bt + stage_ejection_delay.get(i).copied().unwrap_or(0.0));
+                }
+            }
+            if let Some(t_dep) =
+                recovery_deploy_time(rocket, apogee_time, ejection_time, agl, descending, next.t)
+            {
+                if next.t >= t_dep {
+                    deployed = true;
+                    deploy_time = t_dep;
+                    result
+                        .events
+                        .push((t_dep, "RECOVERY_DEVICE_DEPLOYMENT".to_string()));
+                }
+            }
+        }
+        // No recovery device will ever deploy → the rocket tumbles down
+        // (BasicTumbleStepper), not glide stably.
+        if !deployed && !tumbling && apogee_time >= 0.0 && next.vel.z <= 0.0 {
+            use opsrocket_core::component::DeployEvent;
+            let all_never = rocket
+                .iter_components()
+                .filter_map(|c| match c {
+                    Component::Parachute(p) => Some(p),
+                    _ => None,
+                })
+                .all(|p| matches!(p.deploy_event, DeployEvent::Never));
+            if (parachute_count(rocket) == 0 || all_never) && tumble_area > 1e-9 {
+                tumbling = true;
+                result.events.push((next.t, "TUMBLE".to_string()));
             }
         }
         prev_vz = next.vel.z;
@@ -930,14 +1197,23 @@ fn run(
     initial_mass: f64,
     curve: Option<ThrustCurve>,
 ) -> Result<SimulationResult> {
+    let (roll_forcing_c, roll_damp_c) = crate::aero::fin_roll_coeffs(rocket);
     let atmosphere = opts.atmosphere();
     let pitch_rad = opts.launch_pitch_deg.to_radians();
-    let mut state = State::at_rest(opts.launch_altitude, initial_mass.max(0.001), pitch_rad);
+    let mut state = State::at_rest_az(opts.launch_altitude, initial_mass.max(0.001), pitch_rad, opts.launch_azimuth_rad);
 
-    // Java convention (`PinkNoiseWindModel`): an "east wind" (direction = π/2)
-    // means wind blowing FROM east TOWARDS west, i.e. the wind velocity
-    // vector points in -X. So a positive average speed gives a -X velocity.
-    let wind = Vec3::new(-opts.wind_average, 0.0, 0.0);
+    // Faithful pink-noise turbulent wind (PinkNoiseWindModel). OpenRocket
+    // returns the air-velocity vector and computes airspeed = vel + wind;
+    // opsrocket uses v_rel = vel − wind, so we negate OR's vector.
+    let mut wind_model = opsrocket_core::wind::PinkNoiseWindModel::new(opts.wind_seed);
+    wind_model.set_average(opts.wind_average);
+    wind_model.set_direction(opts.wind_direction);
+    wind_model.set_turbulence_intensity(opts.wind_turbulence);
+    fn sample_wind(wm: &mut opsrocket_core::wind::PinkNoiseWindModel, t: f64) -> Vec3 {
+        let (wx, wy, _) = wm.wind_velocity(t.max(0.0));
+        Vec3::new(-wx, -wy, 0.0)
+    }
+    let wind = sample_wind(&mut wind_model, 0.0);
 
     let dt = opts.time_step;
     let aero0 = compute_aero(
@@ -1044,6 +1320,13 @@ fn run(
             body_lift_planform_term: 0.0,
             body_lift_cp: 0.0,
             pitch_damping_mul: 0.0,
+            gravity_model: opts.gravity_model,
+            geodetic: opts.geodetic,
+            launch_site: opts.launch_site(),
+            launch_altitude: opts.launch_altitude,
+            roll_forcing: roll_forcing_c,
+            roll_damp_coeff: roll_damp_c,
+            pyr_seed: 0x23E3_A01F,
         };
         let next = rk4_step(&state, dt, &sampler);
         // monotonic-mass safety: don't let the rocket "gain" mass below empty
@@ -1196,6 +1479,103 @@ fn parachute_drag_factor(rocket: &Rocket) -> f64 {
 
 fn parachute_count(rocket: &Rocket) -> usize {
     rocket.iter_components().filter(|c| matches!(c, Component::Parachute(_))).count()
+}
+
+/// Sampo tumble-drag "Cd·A" — `BasicTumbleStepper.computeCD` numerator
+/// `1.42·ΣaFins + 0.56·aBt` (so the drag force is this × q, matching how
+/// the parachute path uses a Cd·A factor). Used when a rocket with no
+/// recovery device tumbles down instead of gliding stably.
+fn tumble_drag_area(rocket: &Rocket) -> f64 {
+    const C_D_FIN: f64 = 1.42;
+    const C_D_BT: f64 = 0.56;
+    const FIN_EFF: [f64; 8] = [0.0, 0.5, 1.0, 1.41, 1.81, 1.73, 1.90, 1.85];
+    let mut a_fins = 0.0_f64;
+    let mut a_bt = 0.0_f64;
+    for c in rocket.iter_components() {
+        match c {
+            Component::FinSet(f) => {
+                let area = 0.5 * (f.root_chord + f.tip_chord) * f.height;
+                let fc = (f.fin_count as usize).min(FIN_EFF.len() - 1);
+                // area·finEff[N]/N × N fins = area·finEff[N].
+                a_fins += area * FIN_EFF[fc];
+            }
+            Component::BodyTube(t) => {
+                a_bt += 2.0 * t.radius.unwrap_or(0.0) * t.length;
+            }
+            Component::NoseCone(n) => {
+                a_bt += opsrocket_core::profile::shape_integrals(
+                    n.shape, n.shape_parameter, n.length, 0.0, n.aft_radius,
+                )
+                .planform_area;
+            }
+            Component::Transition(tr) => {
+                a_bt += opsrocket_core::profile::shape_integrals(
+                    tr.shape, tr.shape_parameter, tr.length, tr.fore_radius, tr.aft_radius,
+                )
+                .planform_area;
+            }
+            _ => {}
+        }
+    }
+    C_D_FIN * a_fins + C_D_BT * a_bt
+}
+
+/// Earliest absolute deployment time over all recovery devices, per each
+/// device's `DeploymentConfiguration` (faithful to OpenRocket's
+/// `DeployEvent` + `deployDelay`, incl. ejection-charge timing). Returns
+/// `None` if no device can deploy given the triggers known so far.
+///
+/// - `apogee_time`  : >=0 once apogee has occurred, else <0
+/// - `ejection_time`: latest motor burnout + ejection-charge delay (or <0)
+/// - `agl`          : current altitude above the launch site (m)
+/// - `descending`   : true if vertical velocity ≤ 0
+#[allow(clippy::too_many_arguments)]
+fn recovery_deploy_time(
+    rocket: &Rocket,
+    apogee_time: f64,
+    ejection_time: f64,
+    agl: f64,
+    descending: bool,
+    now: f64,
+) -> Option<f64> {
+    use opsrocket_core::component::DeployEvent;
+    let mut best: Option<f64> = None;
+    for c in rocket.iter_components() {
+        if let Component::Parachute(p) = c {
+            let cand = match p.deploy_event {
+                DeployEvent::Launch => Some(p.deploy_delay),
+                DeployEvent::Apogee => {
+                    if apogee_time >= 0.0 {
+                        Some(apogee_time + p.deploy_delay)
+                    } else {
+                        None
+                    }
+                }
+                DeployEvent::Ejection => {
+                    if ejection_time >= 0.0 {
+                        Some(ejection_time + p.deploy_delay.max(0.001))
+                    } else {
+                        None
+                    }
+                }
+                DeployEvent::Altitude => {
+                    // Activates when descending through deployAltitude.
+                    if descending && agl <= p.deploy_altitude {
+                        Some(now + p.deploy_delay.max(0.001))
+                    } else {
+                        None
+                    }
+                }
+                // Lower-stage separation handled by the staging path; Never
+                // never deploys.
+                DeployEvent::LowerStageSeparation | DeployEvent::Never => None,
+            };
+            if let Some(t) = cand {
+                best = Some(best.map_or(t, |b: f64| b.min(t)));
+            }
+        }
+    }
+    best
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -29,6 +29,9 @@ pub fn embedded_motors() -> &'static [(&'static str, &'static str)] {
     EMBEDDED_MOTORS
 }
 
+/// `Motor.PLUGGED_DELAY` — a plugged (no-ejection) delay.
+pub const PLUGGED_DELAY: f64 = f64::INFINITY;
+
 #[derive(Debug, Clone)]
 pub struct ThrustCurve {
     pub designation: String,
@@ -39,6 +42,48 @@ pub struct ThrustCurve {
     pub total_mass: f64,
     pub delays: Vec<f64>,
     pub points: Vec<ThrustPoint>,
+    /// Total motor mass (kg) at each `points[i].time` — OpenRocket's
+    /// `cg[i].getWeight()`. Built by `calculate_mass` for RASP, read from
+    /// the file for RSE.
+    pub mass: Vec<f64>,
+    /// Motor CG x (m from the fore end) at each `points[i].time` —
+    /// OpenRocket's `cg[i].getX()`. Constant `length/2` for RASP.
+    pub cg: Vec<f64>,
+}
+
+/// Port of `AbstractMotorLoader.calculateMass`: integrates F = ṁ·v
+/// (Δm = ½(f₀+f₁)·Δt) and scales so the total mass loss equals the
+/// propellant mass.
+fn calculate_mass(time: &[f64], thrust: &[f64], total: f64, prop: f64) -> Vec<f64> {
+    let n = time.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let mut deltam = Vec::with_capacity(n.saturating_sub(1));
+    let mut total_change = 0.0;
+    let mut t0 = time[0];
+    let mut f0 = thrust[0];
+    for i in 1..n {
+        let t1 = time[i];
+        let f1 = thrust[i];
+        let dm = 0.5 * (f0 + f1) * (t1 - t0);
+        deltam.push(dm);
+        total_change += dm;
+        t0 = t1;
+        f0 = f1;
+    }
+    let mut mass = Vec::with_capacity(n);
+    mass.push(total);
+    let scale = if total_change != 0.0 { prop / total_change } else { 0.0 };
+    let mut cur = total;
+    for dm in deltam {
+        cur -= dm * scale;
+        if cur < 0.0 {
+            cur = 0.0;
+        }
+        mass.push(cur);
+    }
+    mass
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -151,6 +196,8 @@ pub fn rasp_digest(
     s
 }
 
+const SNAP: f64 = 0.0001; // ThrustCurveMotor SNAP_DISTANCE / SNAP_TOLERANCE
+
 impl ThrustCurve {
     /// OpenRocket-compatible motor digest (matches the `<digest>` stored in
     /// `.ork` files for RASP-sourced motors).
@@ -172,63 +219,217 @@ impl ThrustCurve {
             .sum()
     }
 
-    /// Thrust at time `t` (0 outside the curve).
-    pub fn thrust_at(&self, t: f64) -> f64 {
-        if self.points.is_empty() || t <= self.points[0].time {
-            return 0.0;
+    /// `ThrustCurveMotor.getPseudoIndex` — integer index + [0,1] fraction
+    /// (with SNAP rounding to exact data points).
+    fn pseudo_index(&self, motor_time: f64) -> f64 {
+        let n = self.points.len();
+        if n == 0 || motor_time < 0.0 {
+            return f64::NAN;
         }
-        if t >= self.points.last().unwrap().time {
-            return 0.0;
+        // getIndex: largest i with time[i] <= motor_time.
+        let mut lower = 0usize;
+        let mut upper = 0usize;
+        while upper < n && motor_time >= self.points[upper].time {
+            lower = upper;
+            upper += 1;
         }
-        for w in self.points.windows(2) {
-            if t >= w[0].time && t <= w[1].time {
-                let span = w[1].time - w[0].time;
-                if span <= 0.0 {
-                    return w[0].thrust;
-                }
-                let f = (t - w[0].time) / span;
-                return w[0].thrust + f * (w[1].thrust - w[0].thrust);
-            }
+        // getIndexFraction.
+        let upper_idx = lower + 1;
+        if upper_idx == n {
+            return lower as f64;
         }
-        0.0
+        let lt = self.points[lower].time;
+        let ut = self.points[upper_idx].time;
+        let frac = (motor_time - lt) / (ut - lt);
+        let frac = if frac < SNAP {
+            0.0
+        } else if frac > 1.0 - SNAP {
+            1.0
+        } else {
+            frac
+        };
+        lower as f64 + frac
     }
 
-    /// Propellant mass remaining at time `t` (kg), assuming mass loss
-    /// proportional to delivered impulse.
-    pub fn propellant_mass_at(&self, t: f64) -> f64 {
-        let total = self.total_impulse();
-        if total <= 0.0 || self.propellant_mass <= 0.0 {
-            return self.propellant_mass;
+    /// `ThrustCurveMotor.interpolateAtIndex`.
+    fn interp_at(values: &[f64], pi: f64) -> f64 {
+        if pi.is_nan() || values.is_empty() {
+            return 0.0;
         }
-        // Integrate from start to t.
-        let mut delivered = 0.0;
-        for w in self.points.windows(2) {
-            if t <= w[0].time {
+        let lower = pi as usize;
+        if lower + 1 >= values.len() {
+            return values[values.len() - 1];
+        }
+        let lower_frac = pi - lower as f64;
+        let upper_frac = 1.0 - lower_frac;
+        if lower_frac < SNAP {
+            return values[lower];
+        } else if upper_frac < SNAP {
+            return values[lower + 1];
+        }
+        values[lower] * upper_frac + values[lower + 1] * lower_frac
+    }
+
+    /// `ThrustCurveMotor.getThrust(motorTime)`.
+    pub fn thrust_at(&self, t: f64) -> f64 {
+        let pi = self.pseudo_index(t);
+        let thrusts: Vec<f64> = self.points.iter().map(|p| p.thrust).collect();
+        Self::interp_at(&thrusts, pi)
+    }
+
+    pub fn launch_mass(&self) -> f64 {
+        *self.mass.first().unwrap_or(&self.total_mass)
+    }
+
+    pub fn burnout_mass(&self) -> f64 {
+        *self.mass.last().unwrap_or(&(self.total_mass - self.propellant_mass))
+    }
+
+    /// `ThrustCurveMotor.getTotalMass(motorTime)` — interpolated total motor
+    /// mass (kg) from the mass table.
+    pub fn total_mass_at(&self, t: f64) -> f64 {
+        if self.mass.is_empty() {
+            return self.total_mass;
+        }
+        let pi = self.pseudo_index(t);
+        Self::interp_at(&self.mass, pi)
+    }
+
+    /// `ThrustCurveMotor.getCMx(motorTime)` — interpolated motor CG x (m).
+    pub fn cg_at(&self, t: f64) -> f64 {
+        if self.cg.is_empty() {
+            return self.length_m / 2.0;
+        }
+        let pi = self.pseudo_index(t);
+        Self::interp_at(&self.cg, pi)
+    }
+
+    /// `ThrustCurveMotor.getPropellantMass(motorTime)` — total mass at `t`
+    /// minus the burnout mass (faithful table interpolation).
+    pub fn propellant_mass_at(&self, t: f64) -> f64 {
+        (self.total_mass_at(t) - self.burnout_mass()).max(0.0)
+    }
+}
+
+/// `AbstractMotorLoader.sortLists` — stable bubble sort of `time` carrying
+/// the parallel arrays along.
+fn sort_lists(time: &mut [f64], a: &mut [f64], b: &mut [f64], c: &mut [f64]) {
+    let n = time.len();
+    if n < 2 {
+        return;
+    }
+    loop {
+        let mut idx = 0;
+        while idx < n - 1 {
+            if time[idx + 1] < time[idx] {
+                time.swap(idx, idx + 1);
+                a.swap(idx, idx + 1);
+                if !b.is_empty() {
+                    b.swap(idx, idx + 1);
+                }
+                if !c.is_empty() {
+                    c.swap(idx, idx + 1);
+                }
                 break;
             }
-            let upper = t.min(w[1].time);
-            // thrust at upper
-            let f0 = w[0].thrust;
-            let f1 = if upper >= w[1].time {
-                w[1].thrust
-            } else {
-                let frac = (upper - w[0].time) / (w[1].time - w[0].time);
-                f0 + frac * (w[1].thrust - f0)
-            };
-            delivered += 0.5 * (f0 + f1) * (upper - w[0].time);
+            idx += 1;
         }
-        let used = (delivered / total) * self.propellant_mass;
-        (self.propellant_mass - used).max(0.0)
+        if idx >= n - 1 {
+            break;
+        }
+    }
+}
+
+fn approx_eq(a: f64, b: f64) -> bool {
+    (a - b).abs() < 1e-9
+}
+
+/// `AbstractMotorLoader.finalizeThrustCurve` (operating on parallel vecs).
+fn finalize_thrust_curve(
+    time: &mut Vec<f64>,
+    thrust: &mut Vec<f64>,
+    mass: &mut Vec<f64>,
+    cg: &mut Vec<f64>,
+) {
+    if time.is_empty() {
+        return;
+    }
+    let has_m = !mass.is_empty();
+    let has_c = !cg.is_empty();
+    // Insert a t=0 point if missing.
+    if !approx_eq(time[0], 0.0) {
+        time.insert(0, 0.0);
+        thrust.insert(0, 0.0);
+        if has_m {
+            let v = mass[0];
+            mass.insert(0, v);
+        }
+        if has_c {
+            let v = cg[0];
+            cg.insert(0, v);
+        }
+    }
+    // Two t=0 points: drop the first.
+    if time.len() > 1 && approx_eq(time[0], 0.0) && approx_eq(time[1], 0.0) {
+        time.remove(0);
+        thrust.remove(0);
+        if has_m {
+            mass.remove(0);
+        }
+        if has_c {
+            cg.remove(0);
+        }
+    }
+    // Drop consecutive duplicate (time,thrust) points.
+    let mut i = 0;
+    while i + 1 < time.len() {
+        while i + 1 < time.len()
+            && approx_eq(time[i], time[i + 1])
+            && approx_eq(thrust[i], thrust[i + 1])
+        {
+            time.remove(i + 1);
+            thrust.remove(i + 1);
+            if has_m {
+                mass.remove(i + 1);
+            }
+            if has_c {
+                cg.remove(i + 1);
+            }
+        }
+        i += 1;
     }
 }
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("malformed .eng file: {0}")]
+    #[error("malformed motor file: {0}")]
     Malformed(String),
 }
 
-/// Parse a single-motor RASP `.eng` file.
+/// Parse a RASP `.eng` delay field (`5-10-15-P`, `None`, …) faithfully:
+/// split on `-`/`,`, `P`/`plugged` → PLUGGED_DELAY, numeric kept only if
+/// `< 99`, then sorted.
+fn parse_rasp_delays(field: &str) -> Vec<f64> {
+    if field.eq_ignore_ascii_case("none") {
+        return Vec::new();
+    }
+    let mut delays = Vec::new();
+    for s in field.split(['-', ',']).filter(|s| !s.is_empty()) {
+        if s.eq_ignore_ascii_case("p") || s.eq_ignore_ascii_case("plugged") {
+            delays.push(PLUGGED_DELAY);
+        } else if s.chars().all(|c| c.is_ascii_digit()) {
+            if let Ok(d) = s.parse::<f64>() {
+                if d < 99.0 {
+                    delays.push(d);
+                }
+            }
+        }
+    }
+    delays.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    delays
+}
+
+/// Parse a single-motor RASP `.eng` file (faithful to `RASPMotorLoader`).
 pub fn parse_rasp(text: &str) -> Result<ThrustCurve, Error> {
     let mut lines = text
         .lines()
@@ -243,37 +444,46 @@ pub fn parse_rasp(text: &str) -> Result<ThrustCurve, Error> {
     let designation = parts[0].to_string();
     let diameter_m = parts[1].parse::<f64>().map_err(|_| Error::Malformed("diameter".into()))? / 1000.0;
     let length_m = parts[2].parse::<f64>().map_err(|_| Error::Malformed("length".into()))? / 1000.0;
-    let delays = parts[3]
-        .split('-')
-        .filter_map(|s| s.parse::<f64>().ok())
-        .collect();
-    let propellant_mass = parts[4].parse().map_err(|_| Error::Malformed("propellant mass".into()))?;
-    let total_mass = parts[5].parse().map_err(|_| Error::Malformed("total mass".into()))?;
+    let delays = parse_rasp_delays(parts[3]);
+    let propellant_mass: f64 = parts[4].parse().map_err(|_| Error::Malformed("propellant mass".into()))?;
+    let total_mass: f64 = parts[5].parse().map_err(|_| Error::Malformed("total mass".into()))?;
     let manufacturer = parts[6..].join(" ");
+    if propellant_mass > total_mass {
+        return Err(Error::Malformed("propellant weight exceeds total weight".into()));
+    }
 
-    let mut points = Vec::new();
+    // Data: strict 2-column rows until the next comment / EOF.
+    let mut time = Vec::new();
+    let mut thrust = Vec::new();
     for line in lines {
-        let mut it = line.split_whitespace();
-        let t: f64 = match it.next().and_then(|s| s.parse().ok()) {
-            Some(v) => v,
-            None => continue,
-        };
-        let f: f64 = it.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
-        if !points.is_empty() && t == 0.0 && f == 0.0 {
-            break;
+        let buf: Vec<&str> = line.split_whitespace().collect();
+        if buf.is_empty() {
+            continue;
         }
-        points.push(ThrustPoint { time: t, thrust: f });
-        if t > 0.0 && f == 0.0 && points.len() > 1 {
-            break;
+        if buf.len() != 2 {
+            return Err(Error::Malformed("data row must have 2 entries".into()));
         }
+        time.push(buf[0].parse::<f64>().map_err(|_| Error::Malformed("time".into()))?);
+        thrust.push(buf[1].parse::<f64>().map_err(|_| Error::Malformed("thrust".into()))?);
     }
-    if points.is_empty() {
-        return Err(Error::Malformed("no thrust points".into()));
+    if time.len() < 2 {
+        return Err(Error::Malformed("too short thrust-curve".into()));
     }
-    if points[0].time > 0.0 {
-        // RASP files conventionally have an implicit (0, 0) start.
-        points.insert(0, ThrustPoint { time: 0.0, thrust: 0.0 });
-    }
+
+    let mut mass: Vec<f64> = Vec::new();
+    let mut cg: Vec<f64> = Vec::new();
+    sort_lists(&mut time, &mut thrust, &mut mass, &mut cg);
+    finalize_thrust_curve(&mut time, &mut thrust, &mut mass, &mut cg);
+    let mass = calculate_mass(&time, &thrust, total_mass, propellant_mass);
+    // RASP CG is constant at the casing centre.
+    let cg = vec![length_m / 2.0; time.len()];
+
+    let points = time
+        .iter()
+        .zip(thrust.iter())
+        .map(|(&t, &f)| ThrustPoint { time: t, thrust: f })
+        .collect();
+
     Ok(ThrustCurve {
         designation,
         manufacturer,
@@ -283,8 +493,127 @@ pub fn parse_rasp(text: &str) -> Result<ThrustCurve, Error> {
         total_mass,
         delays,
         points,
+        mass,
+        cg,
     })
 }
+
+/// Parse a RockSim `.rse` (XML) motor file — faithful to `RockSimMotorLoader`.
+/// Reads the first `<engine>` element and its `<data>`/`<eng-data>` points.
+pub fn parse_rse(text: &str) -> Result<ThrustCurve, Error> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+
+    let mut reader = Reader::from_str(text);
+    reader.config_mut().trim_text(true);
+    let attr = |e: &quick_xml::events::BytesStart, key: &[u8]| -> Option<String> {
+        e.attributes()
+            .with_checks(false)
+            .flatten()
+            .find(|a| a.key.as_ref() == key)
+            .and_then(|a| a.unescape_value().ok().map(|v| v.to_string()))
+    };
+    let num = |s: Option<String>| -> Option<f64> { s.and_then(|v| v.trim().parse::<f64>().ok()) };
+
+    let mut designation = String::new();
+    let mut manufacturer = String::new();
+    let mut diameter_m = 0.0;
+    let mut length_m = 0.0;
+    let mut init_mass = 0.0;
+    let mut prop_mass = 0.0;
+    let mut delays: Vec<f64> = Vec::new();
+    let mut time = Vec::new();
+    let mut thrust = Vec::new();
+    let mut mass = Vec::new();
+    let mut cg = Vec::new();
+    let mut got_engine = false;
+    let mut buf = Vec::new();
+
+    loop {
+        match reader
+            .read_event_into(&mut buf)
+            .map_err(|e| Error::Malformed(format!("xml: {e}")))?
+        {
+            Event::Start(e) | Event::Empty(e) => {
+                match e.name().as_ref() {
+                    b"engine" if !got_engine => {
+                        got_engine = true;
+                        manufacturer = attr(&e, b"mfg").unwrap_or_default();
+                        designation = attr(&e, b"code").unwrap_or_default();
+                        diameter_m = num(attr(&e, b"dia")).unwrap_or(0.0) / 1000.0;
+                        length_m = num(attr(&e, b"len")).unwrap_or(0.0) / 1000.0;
+                        init_mass = num(attr(&e, b"initWt")).unwrap_or(0.0) / 1000.0;
+                        prop_mass = num(attr(&e, b"propWt")).unwrap_or(0.0) / 1000.0;
+                        if let Some(d) = attr(&e, b"delays") {
+                            for tok in d.split(',') {
+                                if let Ok(v) = tok.trim().parse::<f64>() {
+                                    delays.push(if v >= 90.0 { PLUGGED_DELAY } else { v });
+                                } else if tok.eq_ignore_ascii_case("p")
+                                    || tok.eq_ignore_ascii_case("plugged")
+                                {
+                                    delays.push(PLUGGED_DELAY);
+                                }
+                            }
+                        }
+                    }
+                    b"eng-data" => {
+                        let t = num(attr(&e, b"t"));
+                        let f = num(attr(&e, b"f"));
+                        if let (Some(t), Some(f)) = (t, f) {
+                            time.push(t);
+                            thrust.push(f);
+                            mass.push(num(attr(&e, b"m")).map(|v| v / 1000.0).unwrap_or(f64::NAN));
+                            cg.push(num(attr(&e, b"cg")).map(|v| v / 1000.0).unwrap_or(f64::NAN));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    if !got_engine || time.len() < 2 {
+        return Err(Error::Malformed("no usable <engine> data in RSE".into()));
+    }
+    if prop_mass > init_mass {
+        return Err(Error::Malformed("propellant weight exceeds total weight".into()));
+    }
+
+    sort_lists(&mut time, &mut thrust, &mut mass, &mut cg);
+    finalize_thrust_curve(&mut time, &mut thrust, &mut mass, &mut cg);
+
+    // If the file's mass column is missing/illegal, synthesize it.
+    if mass.iter().any(|m| !m.is_finite()) {
+        mass = calculate_mass(&time, &thrust, init_mass, prop_mass);
+    }
+    // If the CG column is missing/illegal, default to the casing centre.
+    if cg.iter().any(|c| !c.is_finite()) {
+        cg = vec![length_m / 2.0; time.len()];
+    }
+
+    let points = time
+        .iter()
+        .zip(thrust.iter())
+        .map(|(&t, &f)| ThrustPoint { time: t, thrust: f })
+        .collect();
+
+    Ok(ThrustCurve {
+        designation,
+        manufacturer,
+        diameter_m,
+        length_m,
+        propellant_mass: prop_mass,
+        total_mass: init_mass,
+        delays,
+        points,
+        mass,
+        cg,
+    })
+}
+
 
 #[cfg(test)]
 mod tests {

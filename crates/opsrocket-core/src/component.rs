@@ -102,6 +102,17 @@ pub struct Common {
     /// contribute nothing). OpenRocket assembly-level mass override.
     #[serde(default)]
     pub override_subcomponents_mass: bool,
+    /// `<overridecd>` — explicit drag-coefficient override (referenced to the
+    /// rocket reference area). `None` ⇒ compute the CD from geometry.
+    #[serde(default)]
+    pub cd_override: Option<f64>,
+    /// `<overridesubcomponentscd>` — the CD override also applies to the
+    /// whole subtree (children's computed CD is suppressed).
+    #[serde(default)]
+    pub override_subcomponents_cd: bool,
+    /// `<finish>` surface roughness (drives skin-friction). Default Normal.
+    #[serde(default)]
+    pub finish: Finish,
     /// Material the component is made of. May be `None` for assemblies that
     /// have no intrinsic mass.
     #[serde(default)]
@@ -121,6 +132,9 @@ impl Common {
             mass_override: None,
             cg_override: None,
             override_subcomponents_mass: false,
+            cd_override: None,
+            override_subcomponents_cd: false,
+            finish: Finish::Normal,
             material: None,
             appearance: None,
         }
@@ -130,6 +144,56 @@ impl Common {
 impl Default for Common {
     fn default() -> Self {
         Self::new("", "")
+    }
+}
+
+/// Surface finish — `info.openrocket.core.rocketcomponent.ExternalComponent.Finish`.
+/// `roughness_size()` returns the value in metres (drives the
+/// roughness-limited skin-friction coefficient).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Finish {
+    Rough,
+    RoughUnfinished,
+    Unfinished,
+    #[default]
+    Normal,
+    Smooth,
+    Optimum,
+    Polished,
+    FinishPolished,
+    Mirror,
+}
+
+impl Finish {
+    /// `Finish.getRoughnessSize()` (metres).
+    pub fn roughness_size(self) -> f64 {
+        match self {
+            Finish::Rough => 500.0e-6,
+            Finish::RoughUnfinished => 250.0e-6,
+            Finish::Unfinished => 150.0e-6,
+            Finish::Normal => 60.0e-6,
+            Finish::Smooth => 20.0e-6,
+            Finish::Optimum => 5.0e-6,
+            Finish::Polished => 2.0e-6,
+            Finish::FinishPolished => 0.5e-6,
+            Finish::Mirror => 0.0e-6,
+        }
+    }
+
+    /// Parse the `.ork` `<finish>` text.
+    pub fn from_ork(s: &str) -> Self {
+        match s.trim().to_lowercase().as_str() {
+            "rough" => Finish::Rough,
+            "roughunfinished" => Finish::RoughUnfinished,
+            "unfinished" => Finish::Unfinished,
+            "smooth" => Finish::Smooth,
+            "optimum" => Finish::Optimum,
+            "polished" => Finish::Polished,
+            "finishpolished" => Finish::FinishPolished,
+            "mirror" => Finish::Mirror,
+            _ => Finish::Normal,
+        }
     }
 }
 
@@ -606,6 +670,10 @@ pub struct Rocket {
     pub reference_type: ReferenceType,
     /// Explicit reference length / area for non-`maximum` modes.
     pub reference_length: Option<f64>,
+    /// `Rocket.isPerfectFinish()` — selects the laminar/turbulent
+    /// perfect-finish skin-friction branch. Default false.
+    #[serde(default)]
+    pub is_perfect_finish: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]

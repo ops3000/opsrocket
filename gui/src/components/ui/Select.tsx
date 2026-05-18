@@ -145,6 +145,11 @@ export function Select({
             ref={list}
             className="uisel-list"
             role="listbox"
+            // Portalled to <body>, but React replays events through the
+            // component tree — without this, scrolling the list bubbles
+            // up to the header's wheel→horizontal-scroll handler.
+            onWheel={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
             style={{
               position: "fixed",
               left: pos.left,

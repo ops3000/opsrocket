@@ -23,6 +23,7 @@ import { RocketView2D, Overlay2D } from "./components/RocketView2D";
 import { RocketView3D } from "./components/RocketView3D";
 import { FlightChart } from "./components/FlightChart";
 import { PropertyEditor, FieldList } from "./components/PropertyEditor";
+import { COMPONENT_ICONS } from "./lib/component-icons";
 import { MotorsPanel } from "./components/MotorsPanel";
 import { AnalysisPanel } from "./components/AnalysisPanel";
 
@@ -85,6 +86,9 @@ function Workbenchful() {
   >("design");
   const [rollDeg, setRollDeg] = useState(0);
   const [motors, setMotors] = useState<MotorInfo[]>([]);
+  // Vertical split between the rocket view and the flight chart (fraction
+  // of the centre column given to the top panel). Draggable.
+  const [vSplit, setVSplit] = useState(0.5);
   // id of the tree node whose "add child" picker is open (null = none)
   const [addFor, setAddFor] = useState<string | null>(null);
 
@@ -259,6 +263,29 @@ function Workbenchful() {
     }
   };
 
+  // Draggable centre divider: resize the rocket view vs the flight chart.
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const vdrag = useRef(false);
+  const onVSplitDown = (e: React.PointerEvent) => {
+    vdrag.current = true;
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    e.preventDefault();
+  };
+  const onVSplitMove = (e: React.PointerEvent) => {
+    if (!vdrag.current || !viewportRef.current) return;
+    const r = viewportRef.current.getBoundingClientRect();
+    const f = (e.clientY - r.top) / r.height;
+    setVSplit(Math.min(0.85, Math.max(0.15, f)));
+  };
+  const onVSplitUp = (e: React.PointerEvent) => {
+    vdrag.current = false;
+    try {
+      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {
+      /* already released */
+    }
+  };
+
   function exportCsv() {
     if (!fd) return;
     const head = "time_s,altitude_m,velocity_ms,thrust_N";
@@ -377,7 +404,9 @@ function Workbenchful() {
         onPointerMove={onHeaderMove}
         onPointerUp={onHeaderUp}
       >
-        <h1>OpsRocket</h1>
+        <a href="/" target="_top" className="logo-link" title="Home">
+          <img className="logo" src="/ops.png" alt="OpsRocket" />
+        </a>
         <Select
           className="fixsel"
           value={picked}
@@ -554,8 +583,16 @@ function Workbenchful() {
                     style={{ paddingLeft: 8 + n.depth * 14 }}
                     onClick={() => setSelId(n.id)}
                   >
-                    <span>{n.name}</span>
-                    <span className="k">{n.kind}</span>
+                    {COMPONENT_ICONS[n.kind] && (
+                      <img
+                        className="ci"
+                        src={COMPONENT_ICONS[n.kind]}
+                        alt=""
+                        title={n.kind}
+                        draggable={false}
+                      />
+                    )}
+                    <span className="nm">{n.name}</span>
                     {kinds.length > 0 && (
                       <button
                         className="add"
@@ -608,7 +645,13 @@ function Workbenchful() {
           )}
         </aside>
 
-        <div className="viewport">
+        <div
+          className="viewport"
+          ref={viewportRef}
+          style={{
+            gridTemplateRows: `${vSplit}fr 3px ${1 - vSplit}fr`,
+          }}
+        >
           <div className="panel">
             {!(
               tab === "design" &&
@@ -694,6 +737,13 @@ function Workbenchful() {
               />
             )}
           </div>
+          <div
+            className="vsplit"
+            onPointerDown={onVSplitDown}
+            onPointerMove={onVSplitMove}
+            onPointerUp={onVSplitUp}
+            title="Drag to resize"
+          />
           <div className="panel" style={{ borderBottom: "none" }}>
             <span className="tag">Flight</span>
             {fd ? (
