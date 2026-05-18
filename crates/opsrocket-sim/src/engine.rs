@@ -870,6 +870,7 @@ fn run_multistage(
             roll_forcing: roll_forcing_c,
             roll_damp_coeff: roll_damp_c,
             pyr_seed: 0x23E3_A01F,
+            recovery: recovery_active,
         };
 
         // ---- Adaptive timestep (Java RK4SimulationStepper) ----
@@ -937,6 +938,26 @@ fn run_multistage(
                     }
                 }
             }
+            // dt[8]: recovery-phase drag stability. A deployed parachute /
+            // tumble adds a stiff quadratic drag (½ρ·Cd·A·v²); with a fixed
+            // step the explicit RK4 over-shoots and the v² term feeds back
+            // into a runaway (velocity → 1e4+ m/s). The ascent has rate
+            // limits that keep it stable, but during descent the angular
+            // rates are ~0 so nothing shrinks dt. Bound the per-step
+            // velocity change from the (thrust-free) acceleration to a
+            // fraction of the current speed so it converges to terminal
+            // velocity instead. Only active under recovery, so the tuned
+            // ascent trajectory is untouched.
+            let dt_drag = if recovery_active {
+                let acc_mag = probe.d_vel.norm();
+                if acc_mag > 1e-9 {
+                    0.20 * state.vel.norm().max(0.5) / acc_mag
+                } else {
+                    f64::MAX
+                }
+            } else {
+                f64::MAX
+            };
             let min_dt = (user_dt / 20.0).max(MIN_TIME_STEP);
             let mut chosen = base
                 .min(dt_angle)
@@ -945,6 +966,7 @@ fn run_multistage(
                 .min(dt_roll_rate)
                 .min(dt_rod)
                 .min(dt_growth)
+                .min(dt_drag)
                 .min(max_to_event);
             if (max_to_event - chosen).abs() < min_dt && max_to_event < f64::MAX {
                 chosen = max_to_event;
@@ -1327,6 +1349,7 @@ fn run(
             roll_forcing: roll_forcing_c,
             roll_damp_coeff: roll_damp_c,
             pyr_seed: 0x23E3_A01F,
+            recovery: deployed,
         };
         let next = rk4_step(&state, dt, &sampler);
         // monotonic-mass safety: don't let the rocket "gain" mass below empty
@@ -1635,9 +1658,24 @@ fn push_row(
     let total_velocity = state.vel.norm();
     let vertical_velocity = state.vel.z;
     let lateral_velocity = (state.vel.x * state.vel.x + state.vel.y * state.vel.y).sqrt();
-    let vertical_acc = f64::NAN; // not tracked between steps in this MVP
-    let total_acc = f64::NAN;
-    let lateral_acc = f64::NAN;
+    // Acceleration columns: finite-difference of the velocity components
+    // against the previously emitted row (same convention as the
+    // max_acceleration scalar). First row has no predecessor → 0.
+    let (vertical_acc, total_acc, lateral_acc) = match result.rows.last() {
+        Some(p) => {
+            let dtp = state.t - p[0];
+            if dtp > 1e-9 {
+                (
+                    (vertical_velocity - p[3]) / dtp,
+                    (total_velocity - p[4]) / dtp,
+                    (lateral_velocity - p[11]) / dtp,
+                )
+            } else {
+                (0.0, 0.0, 0.0)
+            }
+        }
+        None => (0.0, 0.0, 0.0),
+    };
     let altitude_agl = state.pos.z;
     let altitude_asl = state.pos.z;
     let position_east = state.pos.x;

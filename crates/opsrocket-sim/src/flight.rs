@@ -136,6 +136,13 @@ pub struct ForceSampler<'a> {
     pub roll_damp_coeff: f64,
     /// PITCH_YAW_RANDOM symmetry-breaking seed (per simulation).
     pub pyr_seed: u64,
+    /// Recovery descent (parachute deployed / tumbling). When set, the
+    /// drag is a pure velocity-opposing force using `cd`·`area_ref`
+    /// directly — the AOA axial-drag multiplier (which reverses sign for
+    /// AOA > 90°, correct for a rigid body flying backward but catastrophic
+    /// for a chute whose drag must always oppose motion) is bypassed.
+    /// Mirrors OpenRocket switching to BasicLandingStepper.
+    pub recovery: bool,
 }
 
 /// Deterministic ±`PITCH_YAW_RANDOM` perturbation as a function of the
@@ -194,7 +201,14 @@ impl ForceSampler<'_> {
         // The AOA-induced axial component is carried by the normal force
         // CN projected onto the velocity, NOT a separate term — so there is
         // no extra `CN·sinα` drag here (that would double-count).
-        let cdaxial = crate::aero_drag::axial_cd(alpha, self.cd);
+        let cdaxial = if self.recovery {
+            // Parachute / tumble: drag opposes velocity regardless of body
+            // attitude. Skip the AOA axial multiplier (it returns a
+            // negative Cd for AOA > 90°, which would accelerate the fall).
+            self.cd
+        } else {
+            crate::aero_drag::axial_cd(alpha, self.cd)
+        };
         let axial_drag_mag = q * cdaxial * self.area_ref;
         let drag_world = if v_rel_mag > 1.0e-6 {
             -axial_drag_mag * v_rel / v_rel_mag

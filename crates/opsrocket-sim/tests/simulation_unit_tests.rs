@@ -65,6 +65,7 @@ fn rk4_freefall_matches_analytic() {
         roll_forcing: 0.0,
         roll_damp_coeff: 0.0,
         pyr_seed: 0,
+        recovery: false,
     };
     let mut s = State::at_rest(100.0, 1.0, 0.0);
     let dt = 0.01;
@@ -108,6 +109,7 @@ fn rk4_integrates_mass_loss_linearly() {
         roll_forcing: 0.0,
         roll_damp_coeff: 0.0,
         pyr_seed: 0,
+        recovery: false,
     };
     let mut s = State::at_rest(1000.0, 1.0, 0.0);
     for _ in 0..100 {

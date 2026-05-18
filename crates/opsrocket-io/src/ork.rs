@@ -1324,6 +1324,16 @@ fn parse_motor_mount(reader: &mut Reader<&[u8]>) -> Result<MotorMount> {
                                     match nn.as_ref() {
                                         b"designation" => a.designation = Some(read_text(reader, b"designation")?),
                                         b"digest" => a.digest = Some(read_text(reader, b"digest")?),
+                                        // Ejection-charge delay (e.g. the "3"
+                                        // in A8-3). OpenRocket stores it as
+                                        // <delay> inside <motor>; "none" =
+                                        // plugged (no ejection charge fires).
+                                        b"delay" => {
+                                            let s = read_text(reader, b"delay")?;
+                                            a.ejection_delay = s
+                                                .parse::<f64>()
+                                                .unwrap_or(f64::INFINITY);
+                                        }
                                         _ => skip_to_end(reader, nn.as_ref())?,
                                     }
                                 }
