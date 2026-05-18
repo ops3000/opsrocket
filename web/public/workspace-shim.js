@@ -54,9 +54,22 @@
         case "fixtures":
           return J(await (await realFetch("/orks/index.json")).text());
         case "load_ork": {
-          const buf = await (await realFetch(body.path)).arrayBuffer();
-          return J(w.session_load(new Uint8Array(buf)));
+          // body.b64 = a user-picked local .ork; else fetch the path.
+          let bytes;
+          if (body.b64) {
+            const bin = atob(body.b64);
+            bytes = new Uint8Array(bin.length);
+            for (let k = 0; k < bin.length; k++)
+              bytes[k] = bin.charCodeAt(k);
+          } else {
+            bytes = new Uint8Array(
+              await (await realFetch(body.path)).arrayBuffer(),
+            );
+          }
+          return J(w.session_load(bytes));
         }
+        case "new":
+          return J(w.session_new());
         case "view":
           return J(w.session_view());
         case "component":
@@ -90,10 +103,10 @@
           const blob = new Blob([bytes], { type: "application/zip" });
           const a = document.createElement("a");
           a.href = URL.createObjectURL(blob);
-          a.download = "rocket.ork";
+          a.download = (body && body.path) || "rocket.ork";
           a.click();
           URL.revokeObjectURL(a.href);
-          return J({ saved: "(browser download)" });
+          return J({ saved: a.download });
         }
         default:
           return new Response("unknown endpoint: " + ep, { status: 404 });

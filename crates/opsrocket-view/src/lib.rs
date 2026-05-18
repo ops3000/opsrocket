@@ -8,10 +8,29 @@ pub mod motors;
 pub mod schema;
 pub mod sim;
 
-use opsrocket_core::component::Component;
+use opsrocket_core::component::{Component, Rocket, Stage};
 use opsrocket_core::profile::shape_radius;
 use opsrocket_io::OrkDocument;
 use serde::Serialize;
+
+/// A fresh blank document — one empty "Sustainer" stage, ready for the
+/// user to add components (the workbench "New" action).
+pub fn new_document() -> OrkDocument {
+    let mut rocket = Rocket {
+        name: "Untitled rocket".to_string(),
+        ..Rocket::default()
+    };
+    let mut stage = Stage::default();
+    stage.common.name = "Sustainer".to_string();
+    rocket.stages = vec![stage];
+    OrkDocument {
+        version: "1.0".to_string(),
+        creator: "OpsRocket".to_string(),
+        rocket,
+        simulations: Vec::new(),
+        decals: Vec::new(),
+    }
+}
 
 /// Always-visible stability readout (OpenRocket's headline metric bar).
 #[derive(Serialize, Clone)]

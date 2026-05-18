@@ -609,6 +609,75 @@ button.link:hover { background: none; color: var(--accent); }
   overflow: hidden;
 }
 
+/* File menu (portalled, like .uisel-list). */
+.fmenu {
+  position: fixed;
+  z-index: 40;
+  min-width: 210px;
+  max-height: 70vh;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 5px;
+  box-shadow: 0 8px 24px rgba(58, 42, 26, 0.16);
+  font-size: 13px;
+}
+.fmenu .fm-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  color: var(--ink);
+  padding: 7px 10px;
+  border-radius: calc(var(--radius) - 6px);
+  cursor: pointer;
+  font-size: 13px;
+}
+.fmenu .fm-item:hover:not(:disabled) {
+  background: var(--bg);
+}
+.fmenu .fm-item:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+.fmenu .fm-parent.on {
+  color: var(--accent-dark);
+}
+.fmenu .fm-arrow {
+  color: var(--muted);
+  font-size: 11px;
+}
+.fmenu .fm-sub {
+  margin: 2px 0 4px 8px;
+  border-left: 1px solid var(--line);
+  padding-left: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.fmenu .fm-subitem {
+  font-size: 12px;
+  padding: 6px 10px;
+}
+.fmenu .fm-sep {
+  height: 1px;
+  background: var(--line);
+  margin: 5px 4px;
+}
+.fmenu .fm-empty {
+  color: var(--muted);
+  padding: 6px 10px;
+  font-size: 12px;
+}
+/* Flyout submenu (Open example / Export) — opens to the right on hover. */
+.fmenu.fm-fly {
+  min-width: 250px;
+}
+
 .panel {
   position: relative;
   overflow: hidden;
@@ -675,7 +744,6 @@ footer b { color: var(--accent); }
   display: inline-block;
   font-size: 13px;
 }
-.uisel.fixsel { width: 260px; }
 .uisel.simsel { width: 230px; }
 .prop-row .uisel { width: 110px; }
 .analysis .uisel { width: 160px; }

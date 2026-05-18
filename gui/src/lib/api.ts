@@ -214,6 +214,16 @@ async function req<T>(
 export const loadOrk = (path: string): Promise<Workbench> =>
   req("load_ork", "POST", { path });
 
+export const newDoc = (): Promise<Workbench> => req("new", "POST", {});
+
+// Open a user-picked local .ork: read bytes, base64, hand to the core.
+export const openOrkFile = async (file: File): Promise<Workbench> => {
+  const buf = new Uint8Array(await file.arrayBuffer());
+  let bin = "";
+  for (let i = 0; i < buf.length; i++) bin += String.fromCharCode(buf[i]);
+  return req("load_ork", "POST", { b64: btoa(bin) });
+};
+
 export const getView = (): Promise<Workbench> => req("view", "GET");
 
 export const patchField = (

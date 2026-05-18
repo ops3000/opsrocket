@@ -108,6 +108,21 @@ pub fn session_load(bytes: &[u8]) -> Result<String, JsError> {
     Ok(out)
 }
 
+/// Start a fresh blank document (the File ▸ New action).
+#[wasm_bindgen]
+pub fn session_new() -> Result<String, JsError> {
+    let mut doc = opsrocket_view::new_document();
+    opsrocket_view::schema::ensure_ids(&mut doc.rocket);
+    let out = payload(&doc);
+    SESSION.with(|s| {
+        let mut s = s.borrow_mut();
+        s.doc = Some(doc);
+        s.undo.clear();
+        s.redo.clear();
+    });
+    Ok(out)
+}
+
 /// Step back one edit. No-op (returns the current view) when the undo
 /// stack is empty, so a stray Ctrl/Cmd-Z never errors.
 #[wasm_bindgen]

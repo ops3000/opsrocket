@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   loadOrk,
+  newDoc,
+  openOrkFile,
   runSim,
   saveOrk,
   patchField,
@@ -19,6 +21,12 @@ import {
   MotorInfo,
 } from "./lib/api";
 import { Select } from "./components/ui/Select";
+import { FileMenu } from "./components/ui/FileMenu";
+import {
+  exportFlightCsv,
+  exportDesignPng,
+  exportObj,
+} from "./lib/export";
 import { RocketView2D, Overlay2D } from "./components/RocketView2D";
 import { RocketView3D } from "./components/RocketView3D";
 import { FlightChart } from "./components/FlightChart";
@@ -78,7 +86,6 @@ function Workbenchful() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [fixtures, setFixtures] = useState<Fixture[]>([]);
-  const [picked, setPicked] = useState<string>("");
   const [selId, setSelId] = useState<string | null>(null);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
   const [tab, setTab] = useState<
@@ -94,10 +101,7 @@ function Workbenchful() {
 
   useEffect(() => {
     listFixtures()
-      .then((f) => {
-        setFixtures(f);
-        if (f.length) setPicked(f[0].path);
-      })
+      .then(setFixtures)
       .catch(() => {});
   }, []);
 
@@ -120,19 +124,18 @@ function Workbenchful() {
     }
   }
 
-  const loadPath = (p: string) =>
-    run(
-      () => loadOrk(p),
-      (w) => {
-        setWb(w);
-        setFd(null);
-        setSelId(null);
-        setSim(w.view.simulations[0] ?? "");
-        getMotors()
-          .then(setMotors)
-          .catch(() => setMotors([]));
-      },
-    );
+  const onLoaded = (w: Workbench) => {
+    setWb(w);
+    setFd(null);
+    setSelId(null);
+    setSim(w.view.simulations[0] ?? "");
+    getMotors()
+      .then(setMotors)
+      .catch(() => setMotors([]));
+  };
+  const loadPath = (p: string) => run(() => loadOrk(p), onLoaded);
+  const onNewDoc = () => run(() => newDoc(), onLoaded);
+  const onOpenFile = (f: File) => run(() => openOrkFile(f), onLoaded);
 
   const onPatch = (id: string, key: string, value: unknown) =>
     run(
@@ -286,22 +289,17 @@ function Workbenchful() {
     }
   };
 
-  function exportCsv() {
-    if (!fd) return;
-    const head = "time_s,altitude_m,velocity_ms,thrust_N";
-    const rows = fd.time.map(
-      (t, i) =>
-        `${t},${fd.altitude[i]},${fd.velocity[i]},${fd.thrust[i]}`,
-    );
-    const blob = new Blob([head + "\n" + rows.join("\n")], {
-      type: "text/csv",
-    });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `${(rv?.name ?? "flight").replace(/\W+/g, "_")}_${sim || "sim"}.csv`;
-    a.click();
-    URL.revokeObjectURL(a.href);
-  }
+  // File ▸ Export handlers (see lib/export.ts).
+  const onExportCsv = () => {
+    if (fd) exportFlightCsv(fd, rv?.name ?? "flight", sim);
+  };
+  const onExportPng = () => {
+    if (!exportDesignPng(rv?.name ?? "rocket"))
+      setErr("Open the Side/3D view before exporting an image");
+  };
+  const onExportObj = () => {
+    if (rv) exportObj(rv, rv.name);
+  };
 
   const simNode = wb?.sims.find((s) => s.name === sim) ?? null;
 
@@ -386,13 +384,20 @@ function Workbenchful() {
     };
   }, [rv, stab, wb, sim, fd, motors]);
 
-  const save = () =>
+  const onSaved = (r: { saved: string }) => {
+    setSavedMsg(`Saved → ${r.saved}`);
+    setTimeout(() => setSavedMsg(null), 2500);
+  };
+  const save = () => run(() => saveOrk(), onSaved);
+  const onSaveAs = (name: string) => run(() => saveOrk(name), onSaved);
+  // Export ▸ OpenRocket file (.ork): same write path, name derived from the
+  // design (no prompt) — on the web build the server shim turns it into a
+  // download.
+  const onExportOrk = () =>
     run(
-      () => saveOrk(),
-      (r) => {
-        setSavedMsg(`Saved → ${r.saved}`);
-        setTimeout(() => setSavedMsg(null), 2500);
-      },
+      () =>
+        saveOrk(`${(rv?.name ?? "rocket").replace(/\W+/g, "_")}.ork`),
+      onSaved,
     );
 
   return (
@@ -407,19 +412,21 @@ function Workbenchful() {
         <a href="/" target="_top" className="logo-link" title="Home">
           <img className="logo" src="/ops.png" alt="OpsRocket" />
         </a>
-        <Select
-          className="fixsel"
-          value={picked}
-          onChange={setPicked}
-          disabled={busy || !fixtures.length}
-          options={fixtures.map((f) => ({
-            value: f.path,
-            label: f.name,
-          }))}
+        <FileMenu
+          fixtures={fixtures}
+          busy={busy}
+          hasDoc={!!wb}
+          canExportCsv={!!fd}
+          onNew={onNewDoc}
+          onOpenFile={onOpenFile}
+          onOpenExample={loadPath}
+          onSave={save}
+          onSaveAs={onSaveAs}
+          onExportCsv={onExportCsv}
+          onExportPng={onExportPng}
+          onExportObj={onExportObj}
+          onExportOrk={onExportOrk}
         />
-        <button onClick={() => picked && loadPath(picked)} disabled={busy}>
-          Load
-        </button>
         {rv && (
           <>
             <Select
@@ -452,9 +459,6 @@ function Workbenchful() {
               title="Redo (⇧⌘Z / Ctrl+Y)"
             >
               ↷ Redo
-            </button>
-            <button onClick={save} disabled={busy}>
-              Save
             </button>
             <Select
               title="View"
@@ -515,11 +519,6 @@ function Workbenchful() {
                       : "Analysis"}
               </button>
             ))}
-            {fd && (
-              <button className="ghost" onClick={exportCsv}>
-                Export CSV
-              </button>
-            )}
           </>
         )}
         {savedMsg && <span className="ok">{savedMsg}</span>}

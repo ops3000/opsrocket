@@ -95,6 +95,25 @@ async fn load_ork(
     })))
 }
 
+async fn new_doc(State(st): State<Shared>) -> Result<JsonResp<Value>, (StatusCode, String)> {
+    let mut doc = opsrocket_view::new_document();
+    opsrocket_view::schema::ensure_ids(&mut doc.rocket);
+    let view = opsrocket_view::build_rocket_view(&doc);
+    let stab = opsrocket_view::stability(&doc);
+    let tree = opsrocket_view::schema::build_tree(&doc.rocket);
+    let config = opsrocket_view::motors::config_panel(&doc);
+    let sims = opsrocket_view::sim::sim_list(&doc);
+    let mut s = st.lock().unwrap();
+    s.path = None;
+    s.doc = Some(doc);
+    s.undo.clear();
+    s.redo.clear();
+    Ok(JsonResp(json!({
+        "view": view, "stability": stab, "tree": tree,
+        "config": config, "sims": sims,
+    })))
+}
+
 /// Apply a mutating edit with undo support: snapshot first, keep the
 /// snapshot only if the edit succeeds (clearing redo), otherwise roll the
 /// document back so a rejected edit leaves no trace.
@@ -425,6 +444,7 @@ async fn main() {
     let app = Router::new()
         .route("/api/fixtures", get(fixtures))
         .route("/api/load_ork", post(load_ork))
+        .route("/api/new", post(new_doc))
         .route("/api/view", get(get_view))
         .route("/api/component", axum::routing::patch(patch_component))
         .route("/api/component/delete", post(delete_component))

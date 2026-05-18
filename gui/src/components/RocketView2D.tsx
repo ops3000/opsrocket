@@ -392,6 +392,28 @@ export function RocketView2D({
       }
       g.stroke();
 
+      // cm ruler down the left edge (OpenRocket ScaleScrollPane vertical
+      // ruler): 0 on the rocket axis, ticks every 1 cm out to ±maxR, major
+      // tick + label every 5 cm. Mirrors the top ruler's style/scale.
+      const rulerX = 20;
+      const rCmMax = Math.ceil(maxR * 100);
+      g.strokeStyle = "rgb(90,90,90)";
+      g.fillStyle = "rgb(70,70,70)";
+      g.textAlign = "right";
+      g.textBaseline = "middle";
+      g.beginPath();
+      g.moveTo(rulerX, Math.max(Y(maxR), 0));
+      g.lineTo(rulerX, Math.min(Y(-maxR), H));
+      for (let cm = -rCmMax; cm <= rCmMax; cm++) {
+        const py = Y(cm / 100);
+        if (py < 0 || py > H) continue;
+        const major = cm % 5 === 0;
+        g.moveTo(rulerX, py);
+        g.lineTo(rulerX + (major ? 9 : 5), py);
+        if (major) g.fillText(String(Math.abs(cm)), rulerX - 3, py);
+      }
+      g.stroke();
+
       // Info text blocks. OpenRocket draws the headline block top-left and
       // the stability block top-right; the flight summary sits lower-left.
       const tx = Math.max(X(0), BORDER_W) + 8;

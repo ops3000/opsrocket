@@ -446,6 +446,135 @@ function buildSolid(
   return g;
 }
 
+// Assemble the whole rocket as a THREE.Group from the view model. Shared by
+// the live 3D viewport and File ▸ Export ▸ 3D model (OBJ) so the exported
+// mesh is exactly what's drawn. The caller disposes everything in `bin`.
+export function buildRocketGroup(
+  rv: RocketView,
+  mode: ViewMode,
+): { group: THREE.Group; bin: { dispose(): void }[] } {
+  const rocket = new THREE.Group();
+  const bin: { dispose(): void }[] = [];
+
+  // Pod parts carry a radial transform: orbit by `radial_angle` about the
+  // rocket axis (X) at distance `radial` from it.
+  const radialMount = (obj: THREE.Object3D, r?: number, a?: number) => {
+    if (!r) return obj;
+    obj.position.y = r;
+    const pivot = new THREE.Group();
+    pivot.add(obj);
+    pivot.rotation.x = a || 0;
+    return pivot;
+  };
+
+  for (const prof of rv.lathe) {
+    if (prof.outer.length < 2) continue;
+    rocket.add(
+      radialMount(buildSolid(prof, mode, bin), prof.radial, prof.radial_angle),
+    );
+  }
+
+  // Fins: extruded plate (real thickness), canted, replicated radially.
+  for (const f of rv.fins) {
+    const shape = new THREE.Shape();
+    if (f.outline && f.outline.length >= 3) {
+      // Elliptical / freeform: explicit (chordwise, spanwise) outline.
+      shape.moveTo(f.outline[0][0], f.outline[0][1]);
+      for (let k = 1; k < f.outline.length; k++)
+        shape.lineTo(f.outline[k][0], f.outline[k][1]);
+      shape.lineTo(f.outline[0][0], f.outline[0][1]);
+    } else {
+      shape.moveTo(0, 0);
+      shape.lineTo(f.root_chord, 0);
+      shape.lineTo(f.sweep + f.tip_chord, f.height);
+      shape.lineTo(f.sweep, f.height);
+      shape.lineTo(0, 0);
+    }
+    const th = Math.max(f.thickness, 1e-4);
+    const beveled =
+      f.cross_section === "rounded" || f.cross_section === "airfoil";
+    const bevel = beveled ? Math.min(th * 0.45, f.root_chord * 0.05) : 0;
+    const geo = new THREE.ExtrudeGeometry(shape, {
+      depth: Math.max(th - 2 * bevel, 1e-4),
+      bevelEnabled: beveled,
+      bevelThickness: bevel,
+      bevelSize: bevel,
+      bevelSegments: 2,
+      steps: 1,
+    });
+    geo.translate(0, 0, -th / 2);
+    const matl = makeMaterial(f.mat, mode);
+    matl.side = THREE.DoubleSide;
+    // Balsa (or explicit) texture mapped over the fin planform. Extrude
+    // UVs are in shape metres; tile to a physical grain like OpenRocket.
+    const fr = resolved(f.mat, mode);
+    if (mode !== "figure" && fr.decal && isDefaultTexture(fr.decal)) {
+      const span = Math.max(f.root_chord, f.height, 0.02);
+      const tex = makeTiledTexture(
+        fr.decal.url,
+        Math.max(Math.round(span / TEXEL_M), 1),
+        Math.max(Math.round(span / TEXEL_M), 1),
+      );
+      bin.push(tex);
+      setMap(matl, tex);
+    }
+    bin.push(geo, matl);
+    for (let i = 0; i < f.count; i++) {
+      const m = new THREE.Mesh(geo, matl);
+      // OpenRocket FinRenderer cants the fin about the spanwise (radial)
+      // axis at the body centreline (glRotated(cant, 0,1,0)); the fin's
+      // span is local +Y here, so cant is a rotation about Y.
+      m.rotation.y = f.cant_angle;
+      m.position.set(f.axial_start, f.body_radius, 0);
+      // The fin orbits its mount's OWN axis by angle_offset (+ replication),
+      // then — for a pod fin — that whole assembly is carried out to the
+      // pod centreline (radius `radial`, azimuth `radial_angle`) about the
+      // rocket axis. Two nested pivots, exactly like OpenRocket composes a
+      // FinSet instance inside a PodSet. Centreline fins (radial 0) reduce
+      // to the single pivot.
+      const finPivot = new THREE.Group();
+      finPivot.add(m);
+      finPivot.rotation.x =
+        f.angle_offset + (i / f.count) * Math.PI * 2;
+      rocket.add(
+        radialMount(finPivot, f.radial, f.radial_angle),
+      );
+    }
+  }
+
+  // Launch lugs.
+  for (const lug of rv.lugs) {
+    const geo = new THREE.CylinderGeometry(
+      lug.outer_radius,
+      lug.outer_radius,
+      Math.max(lug.length, 1e-4),
+      24,
+      1,
+      true,
+    );
+    geo.rotateZ(Math.PI / 2);
+    const matl = makeMaterial(lug.mat, mode);
+    matl.side = THREE.DoubleSide;
+    bin.push(geo, matl);
+    for (let i = 0; i < lug.count; i++) {
+      const m = new THREE.Mesh(geo, matl);
+      m.position.set(
+        lug.axial_start + lug.length * (0.5 + i * 1.2),
+        lug.body_radius + lug.outer_radius,
+        0,
+      );
+      const lugPivot = new THREE.Group();
+      lugPivot.add(m);
+      lugPivot.rotation.x = lug.angle_offset;
+      rocket.add(
+        radialMount(lugPivot, lug.radial, lug.radial_angle),
+      );
+    }
+  }
+
+  return { group: rocket, bin };
+}
+
 export function RocketView3D({
   rv,
   mode = "finished",
@@ -478,7 +607,12 @@ export function RocketView3D({
       ? new THREE.Color(1, 0, 1) // chroma key for colour-invariant masks
       : new THREE.Color(0xfe / 255, 0xf3 / 255, 0xc7 / 255);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    // preserveDrawingBuffer so File ▸ Export ▸ Design image (PNG) can read
+    // the framebuffer back via canvas.toDataURL() at any time.
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      preserveDrawingBuffer: true,
+    });
     renderer.setPixelRatio(raw != null ? 1 : Math.min(window.devicePixelRatio, 2));
     renderer.setSize(w, h);
     renderer.toneMapping = THREE.NoToneMapping;
@@ -512,125 +646,7 @@ export function RocketView3D({
     camera.add(key.target);
     key.target.position.set(0, 0, 0);
 
-    const rocket = new THREE.Group();
-    const bin: { dispose(): void }[] = [];
-
-    // Pod parts carry a radial transform: orbit by `radial_angle` about the
-    // rocket axis (X) at distance `radial` from it.
-    const radialMount = (obj: THREE.Object3D, r?: number, a?: number) => {
-      if (!r) return obj;
-      obj.position.y = r;
-      const pivot = new THREE.Group();
-      pivot.add(obj);
-      pivot.rotation.x = a || 0;
-      return pivot;
-    };
-
-    for (const prof of rv.lathe) {
-      if (prof.outer.length < 2) continue;
-      rocket.add(
-        radialMount(buildSolid(prof, mode, bin), prof.radial, prof.radial_angle),
-      );
-    }
-
-    // Fins: extruded plate (real thickness), canted, replicated radially.
-    for (const f of rv.fins) {
-      const shape = new THREE.Shape();
-      if (f.outline && f.outline.length >= 3) {
-        // Elliptical / freeform: explicit (chordwise, spanwise) outline.
-        shape.moveTo(f.outline[0][0], f.outline[0][1]);
-        for (let k = 1; k < f.outline.length; k++)
-          shape.lineTo(f.outline[k][0], f.outline[k][1]);
-        shape.lineTo(f.outline[0][0], f.outline[0][1]);
-      } else {
-        shape.moveTo(0, 0);
-        shape.lineTo(f.root_chord, 0);
-        shape.lineTo(f.sweep + f.tip_chord, f.height);
-        shape.lineTo(f.sweep, f.height);
-        shape.lineTo(0, 0);
-      }
-      const th = Math.max(f.thickness, 1e-4);
-      const beveled =
-        f.cross_section === "rounded" || f.cross_section === "airfoil";
-      const bevel = beveled ? Math.min(th * 0.45, f.root_chord * 0.05) : 0;
-      const geo = new THREE.ExtrudeGeometry(shape, {
-        depth: Math.max(th - 2 * bevel, 1e-4),
-        bevelEnabled: beveled,
-        bevelThickness: bevel,
-        bevelSize: bevel,
-        bevelSegments: 2,
-        steps: 1,
-      });
-      geo.translate(0, 0, -th / 2);
-      const matl = makeMaterial(f.mat, mode);
-      matl.side = THREE.DoubleSide;
-      // Balsa (or explicit) texture mapped over the fin planform. Extrude
-      // UVs are in shape metres; tile to a physical grain like OpenRocket.
-      const fr = resolved(f.mat, mode);
-      if (mode !== "figure" && fr.decal && isDefaultTexture(fr.decal)) {
-        const span = Math.max(f.root_chord, f.height, 0.02);
-        const tex = makeTiledTexture(
-          fr.decal.url,
-          Math.max(Math.round(span / TEXEL_M), 1),
-          Math.max(Math.round(span / TEXEL_M), 1),
-        );
-        bin.push(tex);
-        setMap(matl, tex);
-      }
-      bin.push(geo, matl);
-      for (let i = 0; i < f.count; i++) {
-        const m = new THREE.Mesh(geo, matl);
-        // OpenRocket FinRenderer cants the fin about the spanwise (radial)
-        // axis at the body centreline (glRotated(cant, 0,1,0)); the fin's
-        // span is local +Y here, so cant is a rotation about Y.
-        m.rotation.y = f.cant_angle;
-        m.position.set(f.axial_start, f.body_radius, 0);
-        // The fin orbits its mount's OWN axis by angle_offset (+ replication),
-        // then — for a pod fin — that whole assembly is carried out to the
-        // pod centreline (radius `radial`, azimuth `radial_angle`) about the
-        // rocket axis. Two nested pivots, exactly like OpenRocket composes a
-        // FinSet instance inside a PodSet. Centreline fins (radial 0) reduce
-        // to the single pivot.
-        const finPivot = new THREE.Group();
-        finPivot.add(m);
-        finPivot.rotation.x =
-          f.angle_offset + (i / f.count) * Math.PI * 2;
-        rocket.add(
-          radialMount(finPivot, f.radial, f.radial_angle),
-        );
-      }
-    }
-
-    // Launch lugs.
-    for (const lug of rv.lugs) {
-      const geo = new THREE.CylinderGeometry(
-        lug.outer_radius,
-        lug.outer_radius,
-        Math.max(lug.length, 1e-4),
-        24,
-        1,
-        true,
-      );
-      geo.rotateZ(Math.PI / 2);
-      const matl = makeMaterial(lug.mat, mode);
-      matl.side = THREE.DoubleSide;
-      bin.push(geo, matl);
-      for (let i = 0; i < lug.count; i++) {
-        const m = new THREE.Mesh(geo, matl);
-        m.position.set(
-          lug.axial_start + lug.length * (0.5 + i * 1.2),
-          lug.body_radius + lug.outer_radius,
-          0,
-        );
-        const lugPivot = new THREE.Group();
-        lugPivot.add(m);
-        lugPivot.rotation.x = lug.angle_offset;
-        rocket.add(
-          radialMount(lugPivot, lug.radial, lug.radial_angle),
-        );
-      }
-    }
-
+    const { group: rocket, bin } = buildRocketGroup(rv, mode);
     scene.add(rocket);
 
     rocket.updateWorldMatrix(true, true);
