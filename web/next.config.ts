@@ -4,6 +4,12 @@ import type { NextConfig } from "next";
 // patches fetch and services every /api/* call from the in-browser WASM
 // core before it ever hits the network. No backend, so no rewrites.
 const nextConfig: NextConfig = {
+  // The MCP route reads the OpsRocket wasm engine off the function
+  // filesystem at runtime; make sure the tracer ships it.
+  outputFileTracingIncludes: {
+    "/[transport]": ["./lib/opswasm-web/**"],
+    "/[transport]/route": ["./lib/opswasm-web/**"],
+  },
   async headers() {
     return [
       {

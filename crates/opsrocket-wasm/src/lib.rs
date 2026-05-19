@@ -307,3 +307,261 @@ pub fn session_simulate(req: &str) -> Result<String, JsError> {
 pub fn session_save() -> Result<Vec<u8>, JsError> {
     read_doc(|d| opsrocket_io::write_ork_bytes(d).map_err(jerr))
 }
+
+// ── stateless MCP API ───────────────────────────────────────────────────
+// No session/document state: every call takes the .ork bytes and returns
+// JSON (or new .ork bytes). Mirrors opsrocket-web's handlers but pure, so
+// a serverless function can expose them over MCP. Reuses the embedded
+// motor DB (motors_dir = None) — no filesystem.
+
+const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+fn doc_from(bytes: &[u8]) -> Result<OrkDocument, JsError> {
+    let mut doc = opsrocket_io::read_ork_bytes(bytes).map_err(jerr)?;
+    opsrocket_view::schema::ensure_ids(&mut doc.rocket);
+    Ok(doc)
+}
+
+fn ok_json(v: Value) -> Result<String, JsError> {
+    serde_json::to_string(&v).map_err(jerr)
+}
+
+#[wasm_bindgen]
+pub fn mcp_capabilities() -> Result<String, JsError> {
+    let kinds = [
+        "Stage", "NoseCone", "BodyTube", "Transition", "InnerTube", "FinSet",
+        "TubeFinSet", "LaunchLug", "CenteringRing", "Parachute", "ShockCord",
+        "MassObject", "PodSet", "ParallelStage",
+    ];
+    let allowed: serde_json::Map<String, Value> = kinds
+        .iter()
+        .map(|k| {
+            (
+                k.to_string(),
+                json!(opsrocket_view::schema::allowed_children(k)),
+            )
+        })
+        .collect();
+    ok_json(json!({
+        "engine_version": ENGINE_VERSION,
+        "units": "SI (m, kg, s, N, rad); lengths reported in cm/mm where noted",
+        "component_kinds": kinds,
+        "allowed_children": allowed,
+        "edit_ops": [
+            "patch_field", "add_component", "delete_component",
+            "patch_sim", "assign_motor", "clear_motor", "set_ignition",
+        ],
+    }))
+}
+
+#[wasm_bindgen]
+pub fn mcp_inspect(bytes: &[u8]) -> Result<String, JsError> {
+    let doc = doc_from(bytes)?;
+    ok_json(json!({
+        "engine_version": ENGINE_VERSION,
+        "view": opsrocket_view::build_rocket_view(&doc),
+        "tree": opsrocket_view::schema::build_tree(&doc.rocket),
+        "config": opsrocket_view::motors::config_panel(&doc),
+        "sims": opsrocket_view::sim::sim_list(&doc),
+    }))
+}
+
+#[wasm_bindgen]
+pub fn mcp_stability(bytes: &[u8]) -> Result<String, JsError> {
+    let doc = doc_from(bytes)?;
+    ok_json(json!({
+        "engine_version": ENGINE_VERSION,
+        "stability": opsrocket_view::stability(&doc),
+    }))
+}
+
+#[wasm_bindgen]
+pub fn mcp_analysis(bytes: &[u8], mach: f64) -> Result<String, JsError> {
+    let doc = doc_from(bytes)?;
+    ok_json(json!({
+        "engine_version": ENGINE_VERSION,
+        "analysis": opsrocket_view::analysis::analysis(&doc, mach),
+    }))
+}
+
+#[wasm_bindgen]
+pub fn mcp_simulate(bytes: &[u8], sim_name: Option<String>) -> Result<String, JsError> {
+    let doc = doc_from(bytes)?;
+    let fd = opsrocket_view::run_flight(&doc, sim_name.as_deref(), None).map_err(jerr)?;
+    ok_json(json!({ "engine_version": ENGINE_VERSION, "flight": fd }))
+}
+
+#[wasm_bindgen]
+pub fn mcp_mass_breakdown(bytes: &[u8]) -> Result<String, JsError> {
+    let doc = doc_from(bytes)?;
+    let props = opsrocket_sim::mass::empty_mass_properties(&doc.rocket);
+    let stab = opsrocket_view::stability(&doc);
+    ok_json(json!({
+        "engine_version": ENGINE_VERSION,
+        "mass_kg": props.mass,
+        "cg_axial_m": props.cg_axial,
+        "i_long": props.i_long,
+        "i_rot": props.i_rot,
+        "stability": stab,
+    }))
+}
+
+#[wasm_bindgen]
+pub fn mcp_optimize(bytes: &[u8], params_json: &str) -> Result<String, JsError> {
+    let doc = doc_from(bytes)?;
+    let p = parse(params_json)?;
+    let r = opsrocket_view::analysis::optimize(
+        &doc,
+        p.get("sim_name").and_then(Value::as_str),
+        None,
+        s(&p, "comp_id")?,
+        s(&p, "key")?,
+        p.get("min").and_then(Value::as_f64).ok_or_else(|| jerr("min"))?,
+        p.get("max").and_then(Value::as_f64).ok_or_else(|| jerr("max"))?,
+        p.get("steps").and_then(Value::as_u64).unwrap_or(15) as usize,
+        p.get("goal").and_then(Value::as_str).unwrap_or("apogee"),
+        p.get("target").and_then(Value::as_f64).unwrap_or(0.0),
+        p.get("min_margin").and_then(Value::as_f64).unwrap_or(1.0),
+    )
+    .map_err(jerr)?;
+    ok_json(json!({ "engine_version": ENGINE_VERSION, "optimize": r }))
+}
+
+#[wasm_bindgen]
+pub fn mcp_parity(bytes: &[u8], index: Option<usize>) -> Result<String, JsError> {
+    let doc = doc_from(bytes)?;
+    let idx = index.unwrap_or(0);
+    let sim = doc
+        .simulations
+        .get(idx)
+        .ok_or_else(|| jerr(format!("no simulation index {idx}")))?;
+    let res = opsrocket_sim::engine::simulate_with(&doc, &sim.name, None).map_err(jerr)?;
+    let c = sim
+        .cached
+        .as_ref()
+        .ok_or_else(|| jerr("this .ork has no embedded OpenRocket reference"))?;
+    let pct = |o: f64, r: f64| (o - r) / r.abs().max(1e-9) * 100.0;
+    let find = |evs: &[(f64, String)]| {
+        evs.iter()
+            .find(|(_, k)| {
+                let k = k.to_lowercase();
+                k.contains("recover") || k.contains("deploy")
+            })
+            .map(|(t, _)| *t)
+    };
+    let find_ref = |evs: &[opsrocket_io::ork::FlightEvent]| {
+        evs.iter()
+            .find(|e| {
+                let k = e.kind.to_lowercase();
+                k.contains("recover") || k.contains("deploy")
+            })
+            .map(|e| e.time)
+    };
+    let metric = |o: f64, r: f64| json!({ "ops": o, "openrocket": r, "delta_pct": pct(o, r) });
+    ok_json(json!({
+        "engine_version": ENGINE_VERSION,
+        "sim_name": sim.name,
+        "apogee_m": metric(res.max_altitude, c.max_altitude),
+        "max_velocity_ms": metric(res.max_velocity, c.max_velocity),
+        "max_acceleration_ms2": metric(res.max_acceleration, c.max_acceleration),
+        "flight_time_s": metric(res.flight_time, c.flight_time),
+        "time_to_apogee_s": metric(res.time_to_apogee, c.time_to_apogee),
+        "recovery_deploy_s": {
+            "ops": find(&res.events),
+            "openrocket": find_ref(&c.events),
+        },
+    }))
+}
+
+#[wasm_bindgen]
+pub fn mcp_extract_or_reference(
+    bytes: &[u8],
+    index: Option<usize>,
+) -> Result<String, JsError> {
+    let doc = doc_from(bytes)?;
+    let idx = index.unwrap_or(0);
+    let c = doc
+        .simulations
+        .get(idx)
+        .and_then(|s| s.cached.as_ref())
+        .ok_or_else(|| jerr("no embedded OpenRocket reference"))?;
+    ok_json(json!({
+        "engine_version": ENGINE_VERSION,
+        "columns": c.column_types,
+        "points": c.points.iter().map(|p| &p.values).collect::<Vec<_>>(),
+        "events": c.events.iter().map(|e| json!([e.time, e.kind])).collect::<Vec<_>>(),
+    }))
+}
+
+#[wasm_bindgen]
+pub fn mcp_new_document() -> Result<Vec<u8>, JsError> {
+    let mut doc = opsrocket_view::new_document();
+    opsrocket_view::schema::ensure_ids(&mut doc.rocket);
+    opsrocket_io::write_ork_bytes(&doc).map_err(jerr)
+}
+
+#[wasm_bindgen]
+pub fn mcp_list_motors() -> Result<String, JsError> {
+    ok_json(json!({
+        "engine_version": ENGINE_VERSION,
+        "motors": opsrocket_view::motors::motor_catalog(),
+    }))
+}
+
+/// Apply a list of edit ops and return the new .ork bytes. Stateless: the
+/// caller threads the document through and can re-call mcp_inspect /
+/// mcp_stability on the result for a fresh snapshot.
+#[wasm_bindgen]
+pub fn mcp_edit_apply(bytes: &[u8], ops_json: &str) -> Result<Vec<u8>, JsError> {
+    let mut doc = doc_from(bytes)?;
+    let ops = parse(ops_json)?;
+    let ops = ops.as_array().ok_or_else(|| jerr("ops must be an array"))?;
+    for (i, op) in ops.iter().enumerate() {
+        let kind = s(op, "op")?;
+        let r: Result<(), String> = match kind {
+            "patch_field" => opsrocket_view::schema::apply_edit(
+                &mut doc.rocket,
+                s(op, "id")?,
+                s(op, "key")?,
+                op.get("value").unwrap_or(&Value::Null),
+            ),
+            "add_component" => opsrocket_view::schema::add_component(
+                &mut doc.rocket,
+                s(op, "parent_id")?,
+                s(op, "kind")?,
+            )
+            .map(|_| ()),
+            "delete_component" => {
+                opsrocket_view::schema::delete_component(&mut doc.rocket, s(op, "id")?)
+            }
+            "patch_sim" => opsrocket_view::sim::apply_sim_edit(
+                &mut doc,
+                s(op, "sim_name")?,
+                s(op, "key")?,
+                op.get("value").unwrap_or(&Value::Null),
+            ),
+            "assign_motor" => opsrocket_view::motors::assign_motor(
+                &mut doc.rocket,
+                s(op, "mount_id")?,
+                s(op, "config_id")?,
+                s(op, "designation")?,
+                op.get("digest").and_then(Value::as_str).map(String::from),
+                op.get("ejection_delay").and_then(Value::as_f64).unwrap_or(0.0),
+            ),
+            "clear_motor" => opsrocket_view::motors::clear_motor(
+                &mut doc.rocket,
+                s(op, "mount_id")?,
+                s(op, "config_id")?,
+            ),
+            "set_ignition" => opsrocket_view::motors::set_ignition(
+                &mut doc.rocket,
+                s(op, "mount_id")?,
+                s(op, "event")?,
+                op.get("delay").and_then(Value::as_f64).unwrap_or(0.0),
+            ),
+            other => Err(format!("unknown op '{other}'")),
+        };
+        r.map_err(|e| jerr(format!("op[{i}] ({kind}): {e}")))?;
+    }
+    opsrocket_io::write_ork_bytes(&doc).map_err(jerr)
+}
