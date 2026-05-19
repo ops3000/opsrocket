@@ -29,12 +29,12 @@ const ROCKET_INPUT = {
 
 type Result = { content: { type: "text"; text: string }[]; isError?: boolean };
 
-function ok(obj: unknown, maxChars = 24000): Result {
+function ok(obj: unknown, maxChars = 50000): Result {
   let text = typeof obj === "string" ? obj : JSON.stringify(obj, null, 2);
   if (text.length > maxChars)
     text =
       text.slice(0, maxChars) +
-      `\n\n…[truncated ${text.length - maxChars} chars — narrow the request or use detail:"summary"]`;
+      `\n\n…[OUTPUT TRUNCATED at ${maxChars} chars (${text.length} total) — this text is no longer valid JSON; use detail:"summary", a tighter filter, or fewer max_points]`;
   return { content: [{ type: "text", text }] };
 }
 
@@ -139,15 +139,33 @@ const handler = createMcpHandler(
           const req = (requestInfo as { request?: Request })?.request;
           const b = await resolveRocket(req, pickInput(a));
           const j = JSON.parse(ops.mcp_inspect(b));
-          if (a.detail === "full") return ok(j);
+          if (a.detail === "full") return ok(j, 200000);
           const v = j.view ?? {};
+          // Summary tree: keep ids/kinds/names + editable field KEYS (so
+          // optimize / edit_apply can target them) but drop the bulky
+          // per-field value objects — the full set is in detail:"full".
+          const tree = (j.tree ?? []).map(
+            (n: {
+              id: string;
+              kind: string;
+              name: string;
+              depth: number;
+              fields?: { key: string }[];
+            }) => ({
+              id: n.id,
+              kind: n.kind,
+              name: n.name,
+              depth: n.depth,
+              field_keys: (n.fields ?? []).map((f) => f.key),
+            }),
+          );
           return ok({
             engine_version: j.engine_version,
             name: v.name,
             designer: v.designer,
             total_length_m: v.total_length,
             components: (v.components ?? []).length,
-            tree: j.tree,
+            tree,
             configs: j.config,
             sims: j.sims,
           });
