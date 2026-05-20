@@ -163,7 +163,7 @@ export function HeroPrompt() {
           <>
             sign in with GitHub to open the workbench · also{" "}
             <span className="text-ink">⭐ stars ops3000/opsrocket</span> for
-            you (one-time, scope: public_repo)
+            you (one-time, permission: starring only)
           </>
         )}
       </p>

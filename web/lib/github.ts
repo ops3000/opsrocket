@@ -6,10 +6,14 @@ const UA = "opsrocket-web/1.0 (+https://ops.sg)";
 export function authorizeUrl(redirectUri: string, state: string): string {
   const id = process.env.GITHUB_CLIENT_ID;
   if (!id) throw new Error("GITHUB_CLIENT_ID env var not set");
+  // We expect this to be a GitHub *App* (not a classic OAuth App): its
+  // declared permissions are fixed in the app config (just "Starring:
+  // read & write" — no repo / code / issues access), so the consent
+  // screen shows that one line. The `scope` query param is ignored for
+  // GitHub Apps, so we omit it.
   const q = new URLSearchParams({
     client_id: id,
     redirect_uri: redirectUri,
-    scope: "public_repo", // enough to star a public repo + read user
     state,
     allow_signup: "true",
   });
