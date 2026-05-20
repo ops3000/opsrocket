@@ -2,6 +2,7 @@
 // hero; PARITY / VALIDATION / RENDER / ARCHITECTURE each live on their own
 // route and reuse the pieces here.
 import Link from "next/link";
+import { MobileMenu } from "@/components/MobileMenu";
 import {
   PARITY,
   VALIDATION,
@@ -51,10 +52,11 @@ export function SiteNav({ active }: { active?: string }) {
         </div>
         <Link
           href="/workspace"
-          className="rounded-full border border-[var(--accent)] bg-[rgba(255,45,120,0.12)] px-4 py-2 text-sm font-semibold text-ink transition hover:bg-[rgba(255,45,120,0.25)]"
+          className="hidden rounded-full border border-[var(--accent)] bg-[rgba(255,45,120,0.12)] px-4 py-2 text-sm font-semibold text-ink transition hover:bg-[rgba(255,45,120,0.25)] sm:inline-flex"
         >
           Open Workbench →
         </Link>
+        <MobileMenu active={active} />
       </nav>
     </header>
   );

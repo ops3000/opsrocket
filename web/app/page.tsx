@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { HeroSideviews } from "@/components/HeroSideviews";
 import { HeroPrompt } from "@/components/HeroPrompt";
+import { MobileMenu } from "@/components/MobileMenu";
 import { HEADLINE } from "@/lib/data";
 
 // Home is now just the blueprint hero. PARITY / VALIDATION / RENDER /
@@ -11,7 +12,7 @@ export default function Home() {
       <header className="relative isolate flex h-[100svh] flex-col overflow-hidden lg:h-auto lg:min-h-[100svh]">
         <div className="bp-grid absolute inset-0" />
 
-        <nav className="relative z-10 mx-auto flex w-full max-w-7xl shrink-0 items-center justify-between px-6 py-6">
+        <nav className="relative z-20 mx-auto flex w-full max-w-7xl shrink-0 items-center justify-between px-6 py-6">
           <div className="flex items-center gap-3">
             <img
               src="/ops.png"
@@ -38,10 +39,11 @@ export default function Home() {
           </div>
           <Link
             href="/workspace"
-            className="rounded-full border border-[var(--accent)] bg-[rgba(255,45,120,0.12)] px-4 py-2 text-sm font-semibold text-ink transition hover:bg-[rgba(255,45,120,0.25)]"
+            className="hidden rounded-full border border-[var(--accent)] bg-[rgba(255,45,120,0.12)] px-4 py-2 text-sm font-semibold text-ink transition hover:bg-[rgba(255,45,120,0.25)] sm:inline-flex"
           >
             Open Workbench →
           </Link>
+          <MobileMenu />
         </nav>
 
         <div className="relative z-10 mx-auto flex w-full max-w-7xl min-h-0 flex-1 flex-col px-6 lg:grid lg:flex-none lg:grid-cols-[1.05fr_0.95fr] lg:items-center lg:gap-10 lg:pt-[10vh]">
