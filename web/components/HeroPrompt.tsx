@@ -8,19 +8,12 @@ import { useRouter } from "next/navigation";
 // Returning signed-in visitors submit straight to the workbench with no
 // extra round-trip.
 
-export type Me = { login: string; avatar_url: string; starred: boolean };
+type Me = { login: string; avatar_url: string; starred: boolean } | null;
 
-export function HeroPrompt({
-  onSend,
-}: {
-  /** Called with the typed text when the user is signed in and submits.
-   * If omitted, falls back to routing to /workspace?q=… (the old CTA
-   * behaviour). HeroLeftColumn provides this to unfold the chat surface. */
-  onSend?: (text: string, me: Me | null) => void;
-}) {
+export function HeroPrompt() {
   const router = useRouter();
   const [q, setQ] = useState("");
-  const [me, setMe] = useState<Me | null>(null);
+  const [me, setMe] = useState<Me>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -50,19 +43,11 @@ export function HeroPrompt({
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const text = q.trim();
     if (me) {
-      if (onSend) onSend(text, me);
-      else router.push(target());
+      router.push(target());
     } else {
-      // Bounce through GitHub OAuth; the callback redirects back to
-      // `next`. When chat-mode is the destination, `next` is the
-      // homepage with the typed text encoded so HeroLeftColumn can
-      // re-seed the chat on return.
-      const back = onSend
-        ? `/?q=${encodeURIComponent(text)}`
-        : target();
-      window.location.href = `/api/auth/github/start?next=${encodeURIComponent(back)}`;
+      // Bounce through GitHub OAuth; the callback redirects back to `next`.
+      window.location.href = `/api/auth/github/start?next=${encodeURIComponent(target())}`;
     }
   };
 

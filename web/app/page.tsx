@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { HeroSideviews } from "@/components/HeroSideviews";
-import { HeroLeftColumn } from "@/components/HeroLeftColumn";
+import { HeroPrompt } from "@/components/HeroPrompt";
+import { HEADLINE } from "@/lib/data";
 
 // Home is now just the blueprint hero. PARITY / VALIDATION / RENDER /
 // ARCHITECTURE each live on their own route; no footer here.
@@ -52,8 +53,39 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Text + prompt + (on submit) the chat that unfolds in place. */}
-          <HeroLeftColumn />
+          {/* Text (desktop only) + prompt (bottom band on portrait). */}
+          <div className="order-2 flex w-full shrink-0 flex-col items-center pb-6 lg:order-1 lg:items-start lg:pb-0">
+            <div className="hidden flex-col items-start lg:flex">
+              <h1 className="max-w-2xl text-5xl font-black leading-[1.05] tracking-tight sm:text-6xl">
+                OpenRocket,
+                <br />
+                rewritten in Rust
+              </h1>
+              <p className="mt-7 max-w-xl text-lg text-muted">
+                The headless OpenRocket pipeline —{" "}
+                <span className="text-ink">.ork</span> loading, Barrowman
+                aerodynamics, mass properties, 6-DOF flight — reimplemented and
+                diffed against Java OpenRocket and a flown, altimeter-measured
+                rocket.
+              </p>
+
+              <div className="mt-9 grid w-full max-w-xl grid-cols-2 gap-3">
+                {HEADLINE.map((m) => (
+                  <div key={m.k} className="card px-4 py-4">
+                    <div className="mono text-[10px] uppercase tracking-wider text-muted">
+                      {m.k}
+                    </div>
+                    <div className="mt-1 text-2xl font-bold text-[var(--accent2)]">
+                      {m.v}
+                    </div>
+                    <div className="mt-0.5 text-[11px] text-muted">{m.s}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <HeroPrompt />
+          </div>
         </div>
       </header>
     </main>
