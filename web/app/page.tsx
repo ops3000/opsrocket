@@ -85,20 +85,6 @@ export default function Home() {
             </div>
 
             <HeroPrompt />
-
-            <div className="mono mt-5 w-full max-w-xl text-[11px] text-muted">
-              <span className="uppercase tracking-wider">
-                Or drive it from Claude Code (no account)
-              </span>
-              <code className="mt-1.5 block overflow-x-auto rounded-md border border-[var(--line)] bg-[rgba(0,0,0,0.04)] px-3 py-2 text-ink">
-                claude mcp add --transport http opsrocket
-                https://ops.sg/mcp
-              </code>
-              <span className="mt-1 block">
-                18 tools — simulate, stability, optimize, cross-validate vs
-                OpenRocket, stateless design editing.
-              </span>
-            </div>
           </div>
         </div>
       </header>
