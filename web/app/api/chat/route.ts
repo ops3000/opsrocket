@@ -1,8 +1,13 @@
 import OpenAI from "openai";
+import { SESSION_COOKIE, decodeSession, readCookie } from "@/lib/auth";
 
 // DeepSeek chat — OpenAI-compatible API, streamed back to the client as
 // plain text chunks. Keys live in env (DEEPSEEK_API_KEY); the hero pill
 // in components/HeroPrompt.tsx is the only caller today.
+//
+// Gated by the same GitHub session cookie /api/auth/me uses. Anonymous
+// callers get a 401 so randoms can't curl this endpoint and burn the
+// shared DeepSeek key.
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -21,6 +26,16 @@ const SYSTEM_PROMPT = [
 ].join(" ");
 
 export async function POST(req: Request) {
+  let session = null;
+  try {
+    session = decodeSession(readCookie(req, SESSION_COOKIE));
+  } catch {
+    // Auth env not configured → treat as anonymous, which the next check rejects.
+  }
+  if (!session) {
+    return Response.json({ error: "sign in required" }, { status: 401 });
+  }
+
   const apiKey = process.env.DEEPSEEK_API_KEY;
   if (!apiKey) {
     return Response.json(

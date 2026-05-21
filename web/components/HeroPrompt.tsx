@@ -118,6 +118,13 @@ export function HeroPrompt() {
     const v = q.trim();
     if (!v) return;
 
+    // GitHub sign-in gate. Bounce through OAuth and come back to "/" so
+    // the user can resend. The server also enforces this on /api/chat.
+    if (!me) {
+      window.location.href = `/api/auth/github/start?next=${encodeURIComponent("/")}`;
+      return;
+    }
+
     const history = [
       ...messages.map((m) => ({ role: m.role, content: m.text })),
       { role: "user" as const, content: v },
@@ -306,8 +313,8 @@ export function HeroPrompt() {
               chatOpen
                 ? "Reply…"
                 : me
-                  ? `Open the live workbench, ${me.login}…`
-                  : "Open the live workbench…"
+                  ? `Ask the OpsRocket co-pilot, ${me.login}…`
+                  : "Sign in with GitHub to chat…"
             }
             aria-label="Open the live workbench"
             className="min-w-0 flex-1 bg-transparent text-base text-ink outline-none placeholder:text-muted"
