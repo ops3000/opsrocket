@@ -125,15 +125,17 @@ export function HeroPrompt() {
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const v = q.trim();
-    if (!v) return;
 
-    // GitHub sign-in gate. Bounce through OAuth and come back to "/" so
-    // the user can resend. The server also enforces this on /api/chat.
+    // GitHub sign-in gate runs before the empty-input bail-out so an
+    // unauthed user can hit Sign in with an empty pill. The server also
+    // enforces auth on /api/chat.
     if (!me) {
       window.location.href = `/api/auth/github/start?next=${encodeURIComponent("/")}`;
       return;
     }
+
+    const v = q.trim();
+    if (!v) return;
 
     const history = [
       ...messages.map((m) => ({ role: m.role, content: m.text })),
