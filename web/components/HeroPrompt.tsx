@@ -20,6 +20,7 @@ export function HeroPrompt() {
   const [pending, setPending] = useState(false);
   const [focused, setFocused] = useState(false);
   const [dismissed, setDismissed] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
   const [dragY, setDragY] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [panelHeight, setPanelHeight] = useState(350);
@@ -109,6 +110,15 @@ export function HeroPrompt() {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages, pending, panelHeight]);
+
+  useEffect(() => {
+    if (!accountOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setAccountOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [accountOpen]);
 
   const canSend = q.trim().length > 0 && !pending && !loading;
   const chatOpen = (messages.length > 0 || pending) && !dismissed;
@@ -273,19 +283,72 @@ export function HeroPrompt() {
         >
           {/* Left badge: ops mark on a light disc, or the user's avatar if signed in */}
           {me ? (
-            <span
-              className="flex h-9 w-9 shrink-0 overflow-hidden rounded-full bg-white ring-1 ring-[var(--line)]"
-              title={`Signed in as ${me.login}${me.starred ? " · ⭐ thanks!" : ""}`}
-            >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={me.avatar_url}
-                alt={me.login}
-                width={36}
-                height={36}
-                className="h-9 w-9 object-cover"
-              />
-            </span>
+            <div className="relative">
+              <button
+                type="button"
+                aria-label={`Account menu for ${me.login}`}
+                aria-expanded={accountOpen}
+                onClick={() => setAccountOpen((v) => !v)}
+                className="flex h-9 w-9 shrink-0 overflow-hidden rounded-full bg-white ring-1 ring-[var(--line)] transition hover:ring-[var(--accent)]"
+                title={`Signed in as ${me.login}${me.starred ? " · ⭐ thanks!" : ""}`}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={me.avatar_url}
+                  alt={me.login}
+                  width={36}
+                  height={36}
+                  className="h-9 w-9 object-cover"
+                />
+              </button>
+              {accountOpen && (
+                <>
+                  <button
+                    type="button"
+                    aria-label="Close account menu"
+                    tabIndex={-1}
+                    className="fixed inset-0 z-30 cursor-default bg-transparent"
+                    onClick={() => setAccountOpen(false)}
+                  />
+                  <div
+                    role="menu"
+                    className="absolute bottom-full left-0 z-40 mb-3 w-44 overflow-hidden rounded-2xl p-1"
+                    style={{
+                      background: "var(--bg-2)",
+                      border: "1px solid rgba(232,237,247,0.18)",
+                      boxShadow: "0 18px 48px rgba(0,0,0,0.45)",
+                    }}
+                  >
+                    {/* /api/auth/logout is an API endpoint (Set-Cookie +
+                        redirect) — use a plain anchor so the cookie clear
+                        round-trips through the network, not next/link. */}
+                    {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
+                    <a
+                      href="/api/auth/logout"
+                      role="menuitem"
+                      className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm text-ink hover:bg-[var(--panel)]"
+                    >
+                      <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        aria-hidden="true"
+                      >
+                        <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
+                        <polyline points="16 17 21 12 16 7" />
+                        <line x1="21" y1="12" x2="9" y2="12" />
+                      </svg>
+                      <span>Log out</span>
+                    </a>
+                  </div>
+                </>
+              )}
+            </div>
           ) : (
             <span
               className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white"
