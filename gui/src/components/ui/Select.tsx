@@ -46,12 +46,29 @@ export function Select({
     if (!open) return;
     const place = () => {
       const r = root.current?.getBoundingClientRect();
-      if (r) setPos({ left: r.left, top: r.bottom + 4, width: r.width });
+      if (!r) return;
+      // Use the list's measured width so long option labels (e.g. material
+      // names with density) can't push the menu past the viewport edge.
+      // Falls back to the trigger width on the first frame (before mount).
+      const listEl = list.current;
+      const listW = listEl ? listEl.offsetWidth : r.width;
+      const vw = window.innerWidth;
+      const margin = 8;
+      // Prefer left-aligned to the trigger; if that overflows the right
+      // edge, right-align to the trigger; if still overflowing the left
+      // edge, clamp to the viewport margin.
+      let left = r.left;
+      if (left + listW > vw - margin) left = r.right - listW;
+      if (left < margin) left = margin;
+      setPos({ left, top: r.bottom + 4, width: r.width });
     };
     place();
+    // Re-place once after the list mounts so we can use its real width.
+    const raf = requestAnimationFrame(place);
     window.addEventListener("scroll", place, true);
     window.addEventListener("resize", place);
     return () => {
+      cancelAnimationFrame(raf);
       window.removeEventListener("scroll", place, true);
       window.removeEventListener("resize", place);
     };
