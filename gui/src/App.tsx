@@ -557,7 +557,6 @@ function Workbenchful() {
         onClose={() => setSimModalOpen(false)}
       />
       <PreferencesModal open={prefsOpen} onClose={() => setPrefsOpen(false)} />
-      <ThemeToggle />
       <header
         ref={headerRef}
         onWheel={onHeaderWheel}
@@ -979,10 +978,11 @@ function Workbenchful() {
             </span>
           </>
         ) : (
-          <span style={{ color: "#9a7b56" }}>
+          <span style={{ color: "var(--muted)" }}>
             OpsRocket — Rust core · live design workbench · React + Three.js
           </span>
         )}
+        <ThemeToggle />
       </footer>
     </div>
   );

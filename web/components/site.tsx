@@ -3,6 +3,7 @@
 // route and reuse the pieces here.
 import Link from "next/link";
 import { MobileMenu } from "@/components/MobileMenu";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import {
   PARITY,
   VALIDATION,
@@ -26,16 +27,19 @@ export function SiteNav({ active }: { active?: string }) {
     <header className="relative isolate overflow-hidden border-b border-line">
       <div className="bp-grid absolute inset-0 opacity-60" />
       <nav className="relative z-10 mx-auto flex w-full max-w-7xl items-center justify-between px-6 py-6">
-        <Link href="/" className="flex items-center gap-3">
-          <img
-            src="/ops.png"
-            alt="OpsRocket"
-            className="ops-logo h-9 w-9"
-          />
-          <span className="text-lg font-bold tracking-tight text-ink">
-            OpsRocket
-          </span>
-        </Link>
+        <div className="flex items-center gap-3">
+          <Link href="/" className="flex items-center gap-3">
+            <img
+              src="/ops.png"
+              alt="OpsRocket"
+              className="ops-logo h-9 w-9"
+            />
+            <span className="text-lg font-bold tracking-tight text-ink">
+              OpsRocket
+            </span>
+          </Link>
+          <ThemeToggle />
+        </div>
         <div className="mono hidden gap-7 text-xs sm:flex">
           {NAV.map(([label, href]) => (
             <Link

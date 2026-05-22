@@ -2,6 +2,7 @@ import Link from "next/link";
 import { HeroSideviews } from "@/components/HeroSideviews";
 import { HeroPrompt } from "@/components/HeroPrompt";
 import { MobileMenu } from "@/components/MobileMenu";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { HEADLINE } from "@/lib/data";
 
 // Home is now just the blueprint hero. PARITY / VALIDATION / RENDER /
@@ -22,6 +23,7 @@ export default function Home() {
             <span className="text-lg font-bold tracking-tight text-ink">
               OpsRocket
             </span>
+            <ThemeToggle />
           </div>
           <div className="mono hidden gap-7 text-xs text-muted sm:flex">
             <Link href="/learn" className="hover:text-ink">
