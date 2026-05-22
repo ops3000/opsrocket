@@ -33,7 +33,7 @@ the ops.sg chat can do too.
 claude mcp add --transport http opsrocket https://ops.sg/mcp
 ```
 
-Callable tools (single shared registry for both /mcp and the chat):
+Callable tools — **this is the complete list, do not invent variants**:
 
 `list_examples`, `capabilities`, `inspect`, `stability`, `aero_analysis`,
 `mass_breakdown`, `simulate`, `compare_runs`, `optimize`, `new_document`,
@@ -42,6 +42,10 @@ Callable tools (single shared registry for both /mcp and the chat):
 Two MCP resources: `opsrocket://schema`, `opsrocket://methodology`.
 Three MCP prompts: `validate_design`, `optimize_for_apogee`,
 `design_from_scratch`.
+
+If asked about OpenRocket parity, quote the tables in this skill — they
+were lifted verbatim from `lib/data.ts`, which is the authoritative
+source. There is no live "cross-validation tool".
 
 Note on UA: Cloudflare in front of ops.sg blocks `python-urllib` UA;
 `curl` / Node / official MCP clients are fine.

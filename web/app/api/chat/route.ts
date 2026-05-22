@@ -53,6 +53,8 @@ function buildSystemPrompt(): string {
     "  - `optimize` to sweep a field; `edit_apply` to mutate; `new_document` to start blank",
     "  - `list_motors` / `motor_info` for the thrust-curve database",
     "Threading: tools return `ork_b64`; pass it back into the next tool to keep edits stateless.",
+    "",
+    "Only mention tools that are in the function-calling list provided to you this turn. Do not invent tool names or claim to have called tools that are not in that list. For OpenRocket parity questions, load the `opsrocket` skill — its tables are the authoritative source.",
     skillIndex,
     "",
     "Engine context:",
