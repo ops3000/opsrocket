@@ -66,10 +66,7 @@ export function ThemeToggle({ className = "" }: { className?: string }) {
         type="button"
         aria-hidden="true"
         tabIndex={-1}
-        className={
-          "inline-flex h-8 w-8 items-center justify-center rounded-full border border-[var(--line)] " +
-          className
-        }
+        className={"inline-flex h-8 w-8 items-center justify-center " + className}
         style={{ opacity: 0 }}
       />
     );
@@ -82,7 +79,7 @@ export function ThemeToggle({ className = "" }: { className?: string }) {
       aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
       title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
       className={
-        "inline-flex h-8 w-8 items-center justify-center rounded-full border border-[var(--line)] bg-[var(--bg-2)] text-muted transition hover:border-[var(--accent)] hover:text-ink " +
+        "inline-flex h-8 w-8 items-center justify-center text-muted transition hover:text-[var(--accent)] " +
         className
       }
     >
