@@ -214,6 +214,17 @@ async function req<T>(
 export const loadOrk = (path: string): Promise<Workbench> =>
   req("load_ork", "POST", { path });
 
+// Browser-mode counterpart of openOrkFile: load directly from a base64
+// string. Used by the parent-page bridge (chat → workbench deeplinks).
+export const loadOrkB64 = (b64: string): Promise<Workbench> =>
+  req("load_ork", "POST", { b64 });
+
+// Browser-only: same bytes as save(), returned as base64 instead of
+// triggering a download. Used by the cross-tab chat bridge to expose
+// the current design as AI context.
+export const snapshotOrkB64 = (): Promise<{ ork_b64: string }> =>
+  req("snapshot", "POST", {});
+
 export const newDoc = (): Promise<Workbench> => req("new", "POST", {});
 
 // Open a user-picked local .ork: read bytes, base64, hand to the core.

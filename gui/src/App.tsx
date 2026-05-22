@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   loadOrk,
+  loadOrkB64,
+  snapshotOrkB64,
   newDoc,
   openOrkFile,
   runSim,
@@ -134,8 +136,116 @@ function Workbenchful() {
       .catch(() => setMotors([]));
   };
   const loadPath = (p: string) => run(() => loadOrk(p), onLoaded);
+  const loadB64 = (b64: string) => run(() => loadOrkB64(b64), onLoaded);
   const onNewDoc = () => run(() => newDoc(), onLoaded);
   const onOpenFile = (f: File) => run(() => openOrkFile(f), onLoaded);
+
+  // Workbench bridge.
+  //
+  //   - On boot, look at our own URL (?ork_b64= / ?example= / ?path=) and
+  //     auto-load. This is the chat → workbench deeplink entry point.
+  //   - postMessage(parent): legacy iframe-embedded mode.
+  //   - BroadcastChannel("opsrocket-workbench"): same-origin cross-tab
+  //     bridge with the chat. Listens for `load_design` and replies to
+  //     `ping` with current state; the wb-broadcast effect below pushes
+  //     fresh state on every successful mutation.
+  const bcastRef = useRef<BroadcastChannel | null>(null);
+  const wbRef = useRef<Workbench | null>(null);
+  wbRef.current = wb;
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const b64 = params.get("ork_b64");
+    const example = params.get("example");
+    const path = params.get("path");
+    if (b64) loadB64(b64);
+    else if (example) loadPath(`/orks/${example}`);
+    else if (path) loadPath(path);
+
+    const onParentMsg = (e: MessageEvent) => {
+      if (e.source !== window.parent) return;
+      const m = e.data;
+      if (!m || typeof m !== "object") return;
+      if (m.type === "workbench:load_design") {
+        if (typeof m.b64 === "string") loadB64(m.b64);
+        else if (typeof m.example === "string") loadPath(`/orks/${m.example}`);
+        else if (typeof m.path === "string") loadPath(m.path);
+      }
+    };
+    window.addEventListener("message", onParentMsg);
+    if (window.parent !== window) {
+      window.parent.postMessage({ type: "workbench:ready" }, "*");
+    }
+
+    let chan: BroadcastChannel | null = null;
+    if (typeof BroadcastChannel !== "undefined") {
+      chan = new BroadcastChannel("opsrocket-workbench");
+      bcastRef.current = chan;
+      const onChanMsg = (e: MessageEvent) => {
+        const m = e.data;
+        if (!m || typeof m !== "object") return;
+        if (m.type === "ping") {
+          const w = wbRef.current;
+          if (!w) return;
+          snapshotOrkB64()
+            .then(({ ork_b64 }) => {
+              chan!.postMessage({
+                type: "state",
+                state: {
+                  name: w.view.name,
+                  ork_b64,
+                  total_length_m: w.view.total_length,
+                  components: w.view.components.length,
+                },
+              });
+            })
+            .catch(() => {});
+        } else if (m.type === "load_design" && typeof m.b64 === "string") {
+          loadB64(m.b64);
+        }
+      };
+      chan.addEventListener("message", onChanMsg);
+      chan.postMessage({ type: "ready" });
+    }
+
+    return () => {
+      window.removeEventListener("message", onParentMsg);
+      if (chan) {
+        chan.close();
+        bcastRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Broadcast the current design whenever it changes so the chat tab can
+  // mirror it. Skipped when the channel is unavailable.
+  useEffect(() => {
+    const chan = bcastRef.current;
+    if (!chan) return;
+    if (!wb) {
+      chan.postMessage({ type: "state", state: null });
+      return;
+    }
+    let alive = true;
+    snapshotOrkB64()
+      .then(({ ork_b64 }) => {
+        if (!alive) return;
+        chan.postMessage({
+          type: "state",
+          state: {
+            name: wb.view.name,
+            ork_b64,
+            total_length_m: wb.view.total_length,
+            components: wb.view.components.length,
+          },
+        });
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [wb]);
 
   const onPatch = (id: string, key: string, value: unknown) =>
     run(

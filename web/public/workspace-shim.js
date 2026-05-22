@@ -108,6 +108,16 @@
           URL.revokeObjectURL(a.href);
           return J({ saved: a.download });
         }
+        case "snapshot": {
+          // Same bytes as save(), but returned as base64 instead of
+          // triggering a download. Used by the BroadcastChannel bridge
+          // so the chat tab can pull the current design as context.
+          const bytes = w.session_save();
+          let bin = "";
+          for (let k = 0; k < bytes.length; k++)
+            bin += String.fromCharCode(bytes[k]);
+          return J({ ork_b64: btoa(bin) });
+        }
         default:
           return new Response("unknown endpoint: " + ep, { status: 404 });
       }

@@ -1,38 +1,134 @@
 import OpenAI from "openai";
+import { z } from "zod";
 import { SESSION_COOKIE, decodeSession, readCookie } from "@/lib/auth";
+import { TOOLS, METHODOLOGY, type ToolResult } from "@/lib/mcp-tools";
+import { loadSkills } from "@/lib/skills";
 
-// DeepSeek chat — OpenAI-compatible API, streamed back to the client as
-// plain text chunks. Keys live in env (DEEPSEEK_API_KEY); the hero pill
-// in components/HeroPrompt.tsx is the only caller today.
+// DeepSeek-backed chat with OpsRocket MCP tools wired in as function
+// calls. Streams a line-delimited JSON event protocol back to the client:
+//   {"t":"text","d":"..."}                  — text delta
+//   {"t":"tool","s":"start","i":id,"n":...,"a":{...}}  — tool starting
+//   {"t":"tool","s":"end","i":id,"n":...,"r":"…preview…"}  — tool result
+//   {"t":"tool","s":"end","i":id,"n":...,"e":"…"}       — tool error
+//   {"t":"done"}                            — stream complete
 //
-// Gated by the same GitHub session cookie /api/auth/me uses. Anonymous
-// callers get a 401 so randoms can't curl this endpoint and burn the
-// shared DeepSeek key.
+// Gated by the same GitHub session cookie /api/auth/me uses; the MCP
+// tools all run server-side against the WASM core (lib/opswasm).
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
 const MAX_MESSAGES = 30;
 const MAX_TOTAL_CHARS = 12_000;
+const MAX_HOPS = 5;
+const TOOL_TIMEOUT_MS = 30_000;
+const TOOL_PREVIEW_CHARS = 500;
+const TOOL_RESULT_CHARS = 16_000; // what we feed back to the model
+
+// Local-dev bypass: skip the GitHub session check when this env is "1"
+// and we're not in production. Mirrors the bypass in /api/auth/me.
+const DEV_BYPASS =
+  process.env.NODE_ENV !== "production" &&
+  process.env.OPSROCKET_DEV_NO_AUTH === "1";
 
 type ClientMsg = { role: "user" | "assistant"; content: string };
 
-const SYSTEM_PROMPT = [
-  "You are the OpsRocket co-pilot. OpsRocket is a Rust rewrite of OpenRocket — model-rocketry simulation: Barrowman aero, mass/CG/CP, 6-DOF flight.",
-  "Be terse and technical. Default to metric units.",
-  "Format math with dollar-sign delimiters: `$inline$` and `$$display$$`. Do NOT use `\\(...\\)` or `\\[...\\]`.",
-  "Use standard Markdown for lists, code blocks (with language fences), and tables.",
-  "If the user asks something off-topic, answer briefly and steer back to rocketry / the OpsRocket pipeline.",
-].join(" ");
+function buildSystemPrompt(): string {
+  const skills = loadSkills();
+  const skillIndex = skills.length
+    ? [
+        "",
+        "Available skills (call `load_skill(name=...)` whenever a question matches one of these descriptions — do it BEFORE answering from memory):",
+        ...skills.map((s) => `  - ${s.name} — ${s.description}`),
+      ].join("\n")
+    : "";
+  return [
+    "You are the OpsRocket co-pilot. OpsRocket is a Rust rewrite of OpenRocket — model-rocketry simulation: Barrowman aero, mass/CG/CP, 6-DOF flight.",
+    "",
+    "You have direct function-call access to the OpsRocket engine. Prefer running a tool over guessing. Common starting moves:",
+    "  - `list_examples` to see bundled rockets",
+    "  - `inspect` (with example or ork_b64) for a tree + field keys + sim configs",
+    "  - `simulate` for flight numbers; `stability` for CG/CP/margin; `aero_analysis` for per-component aero",
+    "  - `optimize` to sweep a field; `edit_apply` to mutate; `new_document` to start blank",
+    "  - `list_motors` / `motor_info` for the thrust-curve database",
+    "Threading: tools return `ork_b64`; pass it back into the next tool to keep edits stateless.",
+    skillIndex,
+    "",
+    "Engine context:",
+    METHODOLOGY,
+    "",
+    "Style: terse and technical. Default to metric units. Use `$inline$` / `$$display$$` for math (never `\\(...\\)` or `\\[...\\]`). Standard Markdown for lists, code fences, tables.",
+    "If a tool errors, surface the error briefly and try a different angle instead of looping on the same call.",
+  ].join("\n");
+}
+
+const SYSTEM_PROMPT = buildSystemPrompt();
+
+// ── zod ZodRawShape → JSON schema fragment (OpenAI-tool shape) ─────────
+const TOOL_DEFS = TOOLS.map((t) => ({
+  type: "function" as const,
+  function: {
+    name: t.name,
+    description: t.description,
+    parameters: z.toJSONSchema(z.object(t.inputSchema), {
+      target: "draft-07",
+      unrepresentable: "any",
+    }) as Record<string, unknown>,
+  },
+}));
+
+const TOOL_INDEX = new Map(TOOLS.map((t) => [t.name, t]));
+
+function toolResultText(r: ToolResult): string {
+  const txt = r.content.map((c) => c.text).join("\n");
+  if (txt.length <= TOOL_RESULT_CHARS) return txt;
+  return (
+    txt.slice(0, TOOL_RESULT_CHARS) +
+    `\n…[TRUNCATED at ${TOOL_RESULT_CHARS} chars of ${txt.length}]`
+  );
+}
+
+// If a tool's result JSON top-level contains an `ork_b64`, surface it as
+// a separate event field so the client can deeplink into /workspace.
+function extractOrkB64(text: string): string | undefined {
+  if (!text.startsWith("{")) return undefined;
+  try {
+    const j = JSON.parse(text);
+    if (j && typeof j === "object" && typeof j.ork_b64 === "string") {
+      return j.ork_b64 as string;
+    }
+  } catch {
+    /* not JSON */
+  }
+  return undefined;
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    p.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      },
+    );
+  });
+}
 
 export async function POST(req: Request) {
+  // ── auth ────────────────────────────────────────────────────────────
   let session = null;
   try {
     session = decodeSession(readCookie(req, SESSION_COOKIE));
   } catch {
-    // Auth env not configured → treat as anonymous, which the next check rejects.
+    /* env not configured → treat as anonymous */
   }
-  if (!session) {
+  if (!session && !DEV_BYPASS) {
     return Response.json({ error: "sign in required" }, { status: 401 });
   }
 
@@ -40,10 +136,11 @@ export async function POST(req: Request) {
   if (!apiKey) {
     return Response.json(
       { error: "server missing DEEPSEEK_API_KEY" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 
+  // ── parse + validate ────────────────────────────────────────────────
   let body: unknown;
   try {
     body = await req.json();
@@ -76,29 +173,233 @@ export async function POST(req: Request) {
     messages.push({ role: cm.role, content: cm.content });
   }
 
+  // Optional workbench context — design the user has open in another tab.
+  // Lives in a separate field (not counted against MAX_TOTAL_CHARS) since
+  // ork_b64 can dwarf the chat history.
+  const ctx = (body as { context?: unknown }).context;
+  let workbench:
+    | { ork_b64: string; name?: string; total_length_m?: number; components?: number }
+    | null = null;
+  if (ctx && typeof ctx === "object") {
+    const c = ctx as Record<string, unknown>;
+    if (typeof c.ork_b64 === "string" && c.ork_b64.length > 0) {
+      workbench = {
+        ork_b64: c.ork_b64,
+        name: typeof c.name === "string" ? c.name : undefined,
+        total_length_m:
+          typeof c.total_length_m === "number" ? c.total_length_m : undefined,
+        components:
+          typeof c.components === "number" ? c.components : undefined,
+      };
+    }
+  }
+
+  // ── deepseek client + agentic stream ────────────────────────────────
   const client = new OpenAI({
     apiKey,
     baseURL: process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com",
   });
+  const model = process.env.DEEPSEEK_MODEL ?? "deepseek-chat";
 
-  const stream = await client.chat.completions.create({
-    model: process.env.DEEPSEEK_MODEL ?? "deepseek-chat",
-    stream: true,
-    messages: [{ role: "system", content: SYSTEM_PROMPT }, ...messages],
-  });
+  // openai sdk message type loose-shape; we only use a subset
+  type SdkMsg =
+    | { role: "system"; content: string }
+    | { role: "user"; content: string }
+    | {
+        role: "assistant";
+        content: string | null;
+        tool_calls?: {
+          id: string;
+          type: "function";
+          function: { name: string; arguments: string };
+        }[];
+      }
+    | { role: "tool"; tool_call_id: string; content: string };
+
+  const sdkMessages: SdkMsg[] = [
+    { role: "system", content: SYSTEM_PROMPT },
+  ];
+  if (workbench) {
+    const tag = workbench.name ? ` "${workbench.name}"` : "";
+    const dims = [
+      workbench.total_length_m != null
+        ? `length=${workbench.total_length_m.toFixed(3)}m`
+        : null,
+      workbench.components != null
+        ? `components=${workbench.components}`
+        : null,
+    ]
+      .filter(Boolean)
+      .join(", ");
+    sdkMessages.push({
+      role: "system",
+      content: [
+        `The user currently has a design${tag} open in their Workbench (${dims || "details unknown"}).`,
+        "When they ask about \"my rocket\" / \"this design\" / \"the current rocket\", pass ork_b64 below as the input to relevant tools (inspect, stability, simulate, aero_analysis, optimize, edit_apply, etc.).",
+        "Do NOT echo this base64 back to the user.",
+        "",
+        `ork_b64=${workbench.ork_b64}`,
+      ].join("\n"),
+    });
+  }
+  sdkMessages.push(...messages);
 
   const encoder = new TextEncoder();
   const readable = new ReadableStream<Uint8Array>({
     async start(controller) {
+      const emit = (ev: object) =>
+        controller.enqueue(encoder.encode(JSON.stringify(ev) + "\n"));
+
       try {
-        for await (const chunk of stream) {
-          const delta = chunk.choices[0]?.delta?.content ?? "";
-          if (delta) controller.enqueue(encoder.encode(delta));
+        for (let hop = 0; hop < MAX_HOPS; hop++) {
+          const stream = await client.chat.completions.create({
+            model,
+            // SDK types are stricter than what we accept above; safe at runtime
+            messages: sdkMessages as Parameters<
+              typeof client.chat.completions.create
+            >[0]["messages"],
+            tools: TOOL_DEFS,
+            tool_choice: "auto",
+            stream: true,
+          });
+
+          let textBuf = "";
+          // index → partial accumulator
+          const toolBuf = new Map<
+            number,
+            { id?: string; name?: string; args: string }
+          >();
+
+          for await (const chunk of stream) {
+            const delta = chunk.choices[0]?.delta;
+            if (!delta) continue;
+            if (delta.content) {
+              textBuf += delta.content;
+              emit({ t: "text", d: delta.content });
+            }
+            if (delta.tool_calls) {
+              for (const tc of delta.tool_calls) {
+                const idx = tc.index ?? 0;
+                let buf = toolBuf.get(idx);
+                if (!buf) {
+                  buf = { args: "" };
+                  toolBuf.set(idx, buf);
+                }
+                if (tc.id) buf.id = tc.id;
+                if (tc.function?.name) buf.name = tc.function.name;
+                if (tc.function?.arguments) buf.args += tc.function.arguments;
+              }
+            }
+          }
+
+          if (toolBuf.size === 0) {
+            // Plain text response — we're done.
+            break;
+          }
+
+          // Push the assistant turn (with tool_calls) into history.
+          const toolCalls = Array.from(toolBuf.values())
+            .filter((b) => b.id && b.name)
+            .map((b) => ({
+              id: b.id!,
+              type: "function" as const,
+              function: { name: b.name!, arguments: b.args || "{}" },
+            }));
+
+          sdkMessages.push({
+            role: "assistant",
+            content: textBuf || null,
+            tool_calls: toolCalls,
+          });
+
+          // Execute each tool sequentially.
+          for (const tc of toolCalls) {
+            const tool = TOOL_INDEX.get(tc.function.name);
+            let args: Record<string, unknown> = {};
+            try {
+              args = JSON.parse(tc.function.arguments || "{}");
+            } catch {
+              /* keep empty args */
+            }
+            emit({
+              t: "tool",
+              s: "start",
+              i: tc.id,
+              n: tc.function.name,
+              a: args,
+            });
+
+            if (!tool) {
+              const errMsg = `unknown tool: ${tc.function.name}`;
+              sdkMessages.push({
+                role: "tool",
+                tool_call_id: tc.id,
+                content: `ERROR: ${errMsg}`,
+              });
+              emit({
+                t: "tool",
+                s: "end",
+                i: tc.id,
+                n: tc.function.name,
+                e: errMsg,
+              });
+              continue;
+            }
+
+            try {
+              const result = await withTimeout(
+                tool.handler(args, { req }),
+                TOOL_TIMEOUT_MS,
+                tc.function.name,
+              );
+              const text = toolResultText(result);
+              const orkB64 = extractOrkB64(text);
+              sdkMessages.push({
+                role: "tool",
+                tool_call_id: tc.id,
+                content: text,
+              });
+              if (result.isError) {
+                emit({
+                  t: "tool",
+                  s: "end",
+                  i: tc.id,
+                  n: tc.function.name,
+                  e: text.slice(0, TOOL_PREVIEW_CHARS),
+                });
+              } else {
+                emit({
+                  t: "tool",
+                  s: "end",
+                  i: tc.id,
+                  n: tc.function.name,
+                  r: text.slice(0, TOOL_PREVIEW_CHARS),
+                  ...(orkB64 ? { ork_b64: orkB64 } : {}),
+                });
+              }
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : String(e);
+              sdkMessages.push({
+                role: "tool",
+                tool_call_id: tc.id,
+                content: `ERROR: ${msg}`,
+              });
+              emit({
+                t: "tool",
+                s: "end",
+                i: tc.id,
+                n: tc.function.name,
+                e: msg,
+              });
+            }
+          }
+          // loop again with tool results in history
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : "unknown";
-        controller.enqueue(encoder.encode(`\n\n[stream error: ${msg}]`));
+        emit({ t: "text", d: `\n\n[stream error: ${msg}]` });
       } finally {
+        emit({ t: "done" });
         controller.close();
       }
     },
@@ -106,7 +407,7 @@ export async function POST(req: Request) {
 
   return new Response(readable, {
     headers: {
-      "Content-Type": "text/plain; charset=utf-8",
+      "Content-Type": "application/x-ndjson; charset=utf-8",
       "Cache-Control": "no-cache, no-transform",
       "X-Accel-Buffering": "no",
     },

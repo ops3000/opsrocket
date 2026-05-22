@@ -7,8 +7,10 @@ const nextConfig: NextConfig = {
   // The MCP route reads the OpsRocket wasm engine off the function
   // filesystem at runtime; make sure the tracer ships it.
   outputFileTracingIncludes: {
-    "/[transport]": ["./lib/opswasm-web/**"],
-    "/[transport]/route": ["./lib/opswasm-web/**"],
+    "/[transport]": ["./lib/opswasm-web/**", "./skills/**"],
+    "/[transport]/route": ["./lib/opswasm-web/**", "./skills/**"],
+    "/api/chat": ["./lib/opswasm-web/**", "./skills/**"],
+    "/api/chat/route": ["./lib/opswasm-web/**", "./skills/**"],
   },
   async headers() {
     return [
