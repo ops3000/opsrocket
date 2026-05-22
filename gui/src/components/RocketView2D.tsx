@@ -373,8 +373,22 @@ export function RocketView2D({
     // Skipped in `raw` capture mode so the pixel harness keeps comparing a
     // bare blueprint against OrRef2D.
     if (overlay && !raw) {
+      // Adaptive ruler step: pick the smallest "nice" cm step whose tick
+      // spacing is at least MIN_PX_PER_LABEL pixels apart on the current
+      // canvas — long rockets at fit-to-width zoom (270 cm at ~1280 px)
+      // were drawing every 5-cm label which then overlapped into an
+      // illegible smear.
+      const MIN_PX_PER_LABEL = 36;
+      const NICE_STEPS = [1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500];
+      const pickStep = (pxPerCm: number) => {
+        for (const s of NICE_STEPS) {
+          if (s * pxPerCm >= MIN_PX_PER_LABEL) return s;
+        }
+        return NICE_STEPS[NICE_STEPS.length - 1];
+      };
+
       // cm ruler along the top: minor tick every 1 cm, major + label
-      // every 5 cm, spanning 0 .. ceil(maxX) cm.
+      // every `majorStep` cm, spanning 0 .. ceil(maxX) cm.
       const rulerY = 20;
       g.strokeStyle = "rgb(90,90,90)";
       g.fillStyle = "rgb(70,70,70)";
@@ -386,18 +400,24 @@ export function RocketView2D({
       g.moveTo(X(0), rulerY);
       g.lineTo(X(Math.ceil(maxX * 100) / 100), rulerY);
       const cmMax = Math.ceil(maxX * 100);
+      const pxPerCmX = X(0.01) - X(0);
+      const majorStepX = pickStep(pxPerCmX);
+      // Hide the 1-cm minor ticks once they would visually merge into a
+      // solid bar (anything under ~3 px between them).
+      const showMinorX = pxPerCmX >= 3;
       for (let cm = 0; cm <= cmMax; cm++) {
         const px = X(cm / 100);
-        const major = cm % 5 === 0;
+        const major = cm % majorStepX === 0;
+        if (!major && !showMinorX) continue;
         g.moveTo(px, rulerY);
-        g.lineTo(px, rulerY + (major ? 9 : cm % 1 === 0 ? 5 : 3));
+        g.lineTo(px, rulerY + (major ? 9 : 5));
         if (major) g.fillText(String(cm), px, rulerY + 11);
       }
       g.stroke();
 
       // cm ruler down the left edge (OpenRocket ScaleScrollPane vertical
       // ruler): 0 on the rocket axis, ticks every 1 cm out to ±maxR, major
-      // tick + label every 5 cm. Mirrors the top ruler's style/scale.
+      // tick + label every `majorStepR` cm. Same adaptive rule.
       const rulerX = 20;
       const rCmMax = Math.ceil(maxR * 100);
       g.strokeStyle = "rgb(90,90,90)";
@@ -407,10 +427,14 @@ export function RocketView2D({
       g.beginPath();
       g.moveTo(rulerX, Math.max(Y(maxR), 0));
       g.lineTo(rulerX, Math.min(Y(-maxR), H));
+      const pxPerCmY = Y(0) - Y(0.01);
+      const majorStepR = pickStep(pxPerCmY);
+      const showMinorR = pxPerCmY >= 3;
       for (let cm = -rCmMax; cm <= rCmMax; cm++) {
         const py = Y(cm / 100);
         if (py < 0 || py > H) continue;
-        const major = cm % 5 === 0;
+        const major = cm % majorStepR === 0;
+        if (!major && !showMinorR) continue;
         g.moveTo(rulerX, py);
         g.lineTo(rulerX + (major ? 9 : 5), py);
         if (major) g.fillText(String(Math.abs(cm)), rulerX - 3, py);
