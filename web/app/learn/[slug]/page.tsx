@@ -7,13 +7,13 @@ import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
 
 import { SiteNav, SiteFooter } from "@/components/site";
+import { ChatPill } from "@/components/ChatPill";
 import { Prose } from "@/components/learn/Prose";
 import { Eq } from "@/components/learn/widgets/Eq";
 import { IspCalc } from "@/components/learn/widgets/IspCalc";
 import { Tsiolkovsky } from "@/components/learn/widgets/Tsiolkovsky";
 import { MotorCurve } from "@/components/learn/widgets/MotorCurve";
 import { OpenInWorkbench } from "@/components/learn/widgets/OpenInWorkbench";
-import { DiscussInChat } from "@/components/learn/widgets/DiscussInChat";
 import { loadChapters, findChapter } from "@/lib/learn";
 
 export const dynamicParams = false;
@@ -59,17 +59,14 @@ export default async function ChapterPage({
   const next = idx >= 0 && idx < all.length - 1 ? all[idx + 1] : null;
 
   return (
-    <main className="flex flex-1 flex-col bg-bg text-ink">
+    <main className="relative flex flex-1 flex-col bg-bg text-ink">
       <SiteNav active="/learn" />
       <div className="flex-1">
-        <article className="mx-auto w-full max-w-3xl px-6 py-16">
+        <article className="mx-auto w-full max-w-3xl px-6 pt-16 pb-40">
           <div className="mono mb-2 text-xs tracking-[0.25em] text-[var(--accent2)]">
             LEARN · CHAPTER {String(ch.chapter).padStart(2, "0")}
           </div>
-          <div className="flex items-start justify-between gap-4">
-            <h1 className="text-3xl font-bold sm:text-4xl">{ch.title}</h1>
-            <DiscussInChat slug={ch.slug} title={ch.title} />
-          </div>
+          <h1 className="text-3xl font-bold sm:text-4xl">{ch.title}</h1>
           <p className="mt-3 text-base text-muted">{ch.description}</p>
 
           <Prose>
@@ -136,6 +133,11 @@ export default async function ChapterPage({
         </article>
       </div>
       <SiteFooter />
+      <div className="pointer-events-none fixed inset-x-0 bottom-6 z-30 flex justify-center px-4">
+        <div className="pointer-events-auto w-full max-w-xl">
+          <ChatPill seed={{ slug: ch.slug, title: ch.title }} />
+        </div>
+      </div>
     </main>
   );
 }

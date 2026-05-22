@@ -129,6 +129,7 @@ function ToolChip({
 
 export function ChatPill({
   autoApplyDesigns = false,
+  seed = null,
 }: {
   /**
    * When true, any tool result carrying an `ork_b64` is broadcast onto the
@@ -137,6 +138,12 @@ export function ChatPill({
    * open workbench tab.
    */
   autoApplyDesigns?: boolean;
+  /**
+   * Optional grounding context — e.g. the /learn chapter the user is
+   * currently reading. When set, the first /api/chat call gets a hidden
+   * leading message telling the model what context to load.
+   */
+  seed?: { slug: string; title: string } | null;
 } = {}) {
   const [q, setQ] = useState("");
   const [me, setMe] = useState<Me>(null);
@@ -257,10 +264,14 @@ export function ChatPill({
     };
   }, []);
 
-  // One-shot pickup of a /learn chapter seed (set by DiscussInChat). We
-  // consume + clear it immediately so a refresh doesn't re-inject the same
-  // context forever.
+  // Pick up the chapter seed. Priority: explicit `seed` prop (the /learn
+  // pages render ChatPill with one) → localStorage handoff (legacy path).
+  // Consumed on the next submit and then cleared.
   useEffect(() => {
+    if (seed) {
+      setChapterSeed(seed);
+      return;
+    }
     try {
       const raw = window.localStorage.getItem("opsrocket_chat_seed");
       if (!raw) return;
@@ -272,7 +283,7 @@ export function ChatPill({
     } catch {
       // ignore malformed payload
     }
-  }, []);
+  }, [seed]);
 
   useEffect(() => {
     const el = scrollRef.current;

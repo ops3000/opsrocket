@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { SiteNav, SiteFooter } from "@/components/site";
+import { ChatPill } from "@/components/ChatPill";
 import { loadChapters } from "@/lib/learn";
 
 export const metadata = {
@@ -11,10 +12,10 @@ export const metadata = {
 export default function LearnIndexPage() {
   const chapters = loadChapters();
   return (
-    <main className="flex flex-1 flex-col bg-bg text-ink">
+    <main className="relative flex flex-1 flex-col bg-bg text-ink">
       <SiteNav active="/learn" />
       <div className="flex-1">
-        <section className="mx-auto w-full max-w-3xl px-6 py-20">
+        <section className="mx-auto w-full max-w-3xl px-6 pt-20 pb-40">
           <div className="mono mb-2 text-xs tracking-[0.25em] text-[var(--accent2)]">
             LEARN · ROCKET PROPULSION ELEMENTS, ABRIDGED
           </div>
@@ -58,14 +59,19 @@ export default function LearnIndexPage() {
 
           <p className="mt-10 text-sm text-muted">
             Reading order is the obvious one, but each chapter stands on
-            its own. The chat copilot in <Link className="text-[var(--accent2)] underline" href="/workspace">the workbench</Link> can
-            pull any chapter as context — just ask "tell me about specific
-            impulse" or click <em>Discuss this in chat</em> from inside a
-            chapter.
+            its own. The chat copilot sits at the bottom of every chapter
+            and on the <Link className="text-[var(--accent2)] underline" href="/workspace">workbench</Link> —
+            ask it "tell me about specific impulse" and it'll pull the
+            chapter as context.
           </p>
         </section>
       </div>
       <SiteFooter />
+      <div className="pointer-events-none fixed inset-x-0 bottom-6 z-30 flex justify-center px-4">
+        <div className="pointer-events-auto w-full max-w-xl">
+          <ChatPill />
+        </div>
+      </div>
     </main>
   );
 }
