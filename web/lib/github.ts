@@ -107,9 +107,13 @@ export async function starRepo(
     const scopes = r.headers.get("x-oauth-scopes") ?? "(none)";
     const acceptedScopes =
       r.headers.get("x-accepted-oauth-scopes") ?? "(none)";
+    // First 5 chars of the token tell us its kind: ghu_=GitHub App user
+    // token (right), gho_=classic OAuth (wrong client_id env), others=odd.
+    const tokenKind = token.slice(0, 5);
     console.warn(
       `[starRepo] ${ownerRepo} → ${r.status} ${r.statusText} · ` +
-        `x-oauth-scopes=${scopes} · accepted=${acceptedScopes} · body=${body}`,
+        `token=${tokenKind}... · x-oauth-scopes=${scopes} · ` +
+        `accepted=${acceptedScopes} · body=${body}`,
     );
   }
   return r.status === 204;
