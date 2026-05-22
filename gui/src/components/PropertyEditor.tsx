@@ -6,10 +6,25 @@ import {
   componentMass,
   listMaterials,
 } from "../lib/api";
-import { formatForField, formatFrom, groupForField } from "../lib/units";
+import {
+  formatForField,
+  formatFrom,
+  formatQuantity,
+  groupForField,
+  UnitGroupId,
+} from "../lib/units";
 import { useUnitPref } from "../lib/units-react";
 import { Select } from "./ui/Select";
 import { UnitInput } from "./ui/UnitInput";
+
+// Each Material row has a `kind` ("bulk" | "surface" | "line") that picks
+// which density UnitGroup converts and formats its value.
+const densityGroup = (kind: string): UnitGroupId =>
+  kind === "surface"
+    ? "density_surface"
+    : kind === "line"
+      ? "density_line"
+      : "density_bulk";
 
 // One generic panel renders every component's editable surface from the
 // schema the Rust core emits — OpenRocket's ~40 dialogs collapsed into one.
@@ -101,9 +116,8 @@ function FieldRow({
   if (f.key === "material_name") {
     // Catalog picker. The current value is always preserved as a selectable
     // option even if it's not in the bundled list (handles custom materials
-    // loaded from foreign .ork files).
-    const unit = (k: string) =>
-      k === "bulk" ? "kg/m³" : k === "surface" ? "kg/m²" : "kg/m";
+    // loaded from foreign .ork files). Density is rendered in the user's
+    // preferred unit for the material's kind (bulk/surface/line).
     const sorted = [...materials].sort((a, b) =>
       (a.group + a.name).localeCompare(b.group + b.name),
     );
@@ -114,7 +128,7 @@ function FieldRow({
         : [{ value: modelStr, label: `${modelStr} (custom)` }]),
       ...sorted.map((m) => ({
         value: m.name,
-        label: `${m.name} — ${m.density} ${unit(m.kind)} · ${m.group}`,
+        label: `${m.name} — ${formatQuantity(m.density, densityGroup(m.kind))} · ${m.group}`,
       })),
     ];
     return (
@@ -331,7 +345,7 @@ export function PropertyEditor({
       <datalist id="opsrocket-materials">
         {materials.map((m) => (
           <option key={m.name} value={m.name}>
-            {m.density} · {m.group}
+            {formatQuantity(m.density, densityGroup(m.kind))} · {m.group}
           </option>
         ))}
       </datalist>

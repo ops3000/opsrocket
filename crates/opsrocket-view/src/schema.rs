@@ -70,6 +70,11 @@ fn f_len(key: &str, label: &str, v: f64) -> Field {
 fn f_num(key: &str, label: &str, v: f64) -> Field {
     Field { key: key.into(), label: label.into(), kind: FieldKind::Number, value: json!(v), options: None, unit: None, section: None }
 }
+// Like f_num but attaches a unit label so the GUI's UnitGroup picker can
+// resolve the quantity (e.g. "kg/m³" → density_bulk).
+fn f_num_unit(key: &str, label: &str, v: f64, unit: &str) -> Field {
+    Field { key: key.into(), label: label.into(), kind: FieldKind::Number, value: json!(v), options: None, unit: Some(unit.into()), section: None }
+}
 fn f_mass(key: &str, label: &str, v: f64) -> Field {
     Field { key: key.into(), label: label.into(), kind: FieldKind::Mass, value: json!(v * 1000.0), options: None, unit: Some("g".into()), section: None }
 }
@@ -324,7 +329,15 @@ fn common_fields(c: &Common) -> Vec<Field> {
     v.push(f_ang("angle_offset", "Angle offset", c.angle_offset));
     if let Some(m) = &c.material {
         v.push(f_text("material_name", "Material", &m.name));
-        v.push(f_num("material_density", "Density (SI)", m.density));
+        // The wire unit depends on the material's dimensionality so the GUI's
+        // UnitGroup mapping (kg/m³ → density_bulk, kg/m² → density_surface,
+        // kg/m → density_line) picks the right conversion table.
+        let dunit = match m.kind {
+            MaterialType::Bulk => "kg/m³",
+            MaterialType::Surface => "kg/m²",
+            MaterialType::Line => "kg/m",
+        };
+        v.push(f_num_unit("material_density", "Density", m.density, dunit));
     }
     v.push(f_enum("finish", "Surface finish", finish_str(c.finish), FINISHES));
     tag_section(&mut v, 0, "general");
