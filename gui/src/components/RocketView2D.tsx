@@ -443,93 +443,39 @@ export function RocketView2D({
 
       // Info text blocks. OpenRocket draws the headline block top-left and
       // the stability block top-right; the flight summary sits lower-left.
-      // Each block sits on a frosted-glass card so the underlying rocket
-      // schematic doesn't visually merge with the text.
       const tx = Math.max(X(0), BORDER_W) + 8;
       const fNorm = "13px -apple-system, Helvetica, Arial, sans-serif";
       g.textBaseline = "alphabetic";
       const lineH = 19;
-      const pad = { x: 12, top: 14, bottom: 12 };
 
-      const roundRect = (x: number, y: number, w: number, h: number, r = 10) => {
-        g.beginPath();
-        g.moveTo(x + r, y);
-        g.lineTo(x + w - r, y);
-        g.quadraticCurveTo(x + w, y, x + w, y + r);
-        g.lineTo(x + w, y + h - r);
-        g.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-        g.lineTo(x + r, y + h);
-        g.quadraticCurveTo(x, y + h, x, y + h - r);
-        g.lineTo(x, y + r);
-        g.quadraticCurveTo(x, y, x + r, y);
-        g.closePath();
-      };
-      const glassCard = (x: number, y: number, w: number, h: number) => {
-        g.save();
-        g.shadowColor = "rgba(58, 42, 26, 0.08)";
-        g.shadowBlur = 16;
-        g.shadowOffsetY = 3;
-        g.fillStyle = "rgba(255, 250, 240, 0.78)";
-        roundRect(x, y, w, h);
-        g.fill();
-        g.restore();
-        g.strokeStyle = "rgba(231, 216, 176, 0.65)";
-        g.lineWidth = 1;
-        roundRect(x, y, w, h);
-        g.stroke();
-      };
-      const measureMax = (lines: string[]) => {
-        let m = 0;
-        for (const s of lines) {
-          const w = g.measureText(s).width;
-          if (w > m) m = w;
-        }
-        return m;
-      };
-
+      g.textAlign = "left";
+      g.fillStyle = "rgb(28,40,90)";
       g.font = fNorm;
-
-      // ── Top-left card: name + dimensions + mass ──────────────────
+      let ty = rulerY + 34;
       const mm =
         overlay.mass_motors_g != null
           ? formatFrom(overlay.mass_motors_g, "mass", "g")
           : "—";
-      const tlLines = [
+      for (const s of [
         overlay.name,
         `Length ${formatFrom(overlay.length_cm, "length", "cm")}, max. diameter ${formatFrom(overlay.max_diam_cm, "length", "cm")}`,
         `Mass with no motors ${formatFrom(overlay.mass_g, "mass", "g")}`,
         `Mass with motors ${mm}`,
-      ];
-      const tlWidth = measureMax(tlLines) + pad.x * 2;
-      const tlHeight = tlLines.length * lineH + pad.top + pad.bottom - 4;
-      glassCard(tx - pad.x, rulerY + 24, tlWidth, tlHeight);
-
-      g.textAlign = "left";
-      g.fillStyle = "rgb(28,40,90)";
-      let ty = rulerY + 34 + 8;
-      for (const s of tlLines) {
+      ]) {
         g.fillText(s, tx, ty);
         ty += lineH;
       }
 
-      // ── Top-right card: stability + CG/CP + Mach ────────────────
+      // Top-right: stability + CG/CP, right-aligned.
       const rx = W - 12;
-      const stabLine = `Stability: ${roundForDisplay(overlay.margin_cal, 2)} cal / ${roundForDisplay(overlay.margin_pct, 2)} %`;
-      const cgLine = `CG: ${formatFrom(overlay.cg_cm, "length", "cm")}`;
-      const cpLine = `CP: ${formatFrom(overlay.cp_cm, "length", "cm")}`;
-      const machLine = `at M=${roundForDisplay(overlay.mach, 3)}`;
-      const trLines = [stabLine, cgLine, cpLine, machLine];
-      // The CG/CP rows have a 6.5-radius glyph + 12px gap to the left of
-      // the text, so widen accordingly.
-      const trTextWidth = measureMax(trLines);
-      const trWidth = trTextWidth + 22 + pad.x * 2;
-      const trHeight = trLines.length * lineH + pad.top + pad.bottom - 4;
-      glassCard(rx - trWidth + pad.x, rulerY + 24, trWidth, trHeight);
-
       g.textAlign = "right";
-      let ry = rulerY + 34 + 8;
+      let ry = rulerY + 34;
       g.fillStyle = "rgb(28,40,90)";
-      g.fillText(stabLine, rx, ry);
+      g.fillText(
+        `Stability: ${roundForDisplay(overlay.margin_cal, 2)} cal / ${roundForDisplay(overlay.margin_pct, 2)} %`,
+        rx,
+        ry,
+      );
       ry += lineH;
       // CG balance glyph (quartered blue/white circle).
       const glyph = (cx: number, cy: number, kind: "cg" | "cp") => {
@@ -576,44 +522,32 @@ export function RocketView2D({
       g.fillText(`at M=${roundForDisplay(overlay.mach, 3)}`, rx, ry);
 
       // Lower-left flight summary (blue), only when a sim has been run.
-      // Same frosted-card treatment as the top blocks.
-      const flightRows: [string, string][] = [];
-      flightRows.push(["Flight configuration:", overlay.config_name]);
+      g.textAlign = "left";
+      g.fillStyle = "rgb(43,63,174)";
+      g.font = fNorm;
+      let fy = H * 0.6;
+      const lab = (k: string, v: string) => {
+        g.fillText(k, tx, fy);
+        g.fillText(v, tx + 150, fy);
+        fy += lineH;
+      };
+      lab("Flight configuration:", overlay.config_name);
       if (overlay.apogee_m != null)
-        flightRows.push([
-          "Apogee:",
-          formatQuantity(overlay.apogee_m, "distance"),
-        ]);
+        lab("Apogee:", formatQuantity(overlay.apogee_m, "distance"));
       if (overlay.max_velocity_ms != null)
-        flightRows.push([
+        lab(
           "Max. velocity:",
           formatQuantity(overlay.max_velocity_ms, "velocity") +
             (overlay.max_velocity_mach != null
               ? `  (Mach ${roundForDisplay(overlay.max_velocity_mach, 3)})`
               : ""),
-        ]);
+        );
       if (overlay.max_accel_ms2 != null)
-        flightRows.push([
+        // No proper "acceleration" unit group yet — keep m/s² literal for now.
+        lab(
           "Max. acceleration:",
           `${roundForDisplay(overlay.max_accel_ms2, 0)} m/s²`,
-        ]);
-
-      g.font = fNorm;
-      const valueColX = 150;
-      const flValueMax = measureMax(flightRows.map(([, v]) => v));
-      const flWidth = valueColX + flValueMax + pad.x * 2;
-      const flHeight = flightRows.length * lineH + pad.top + pad.bottom - 4;
-      const flY = H * 0.6 - 8;
-      glassCard(tx - pad.x, flY, flWidth, flHeight);
-
-      g.textAlign = "left";
-      g.fillStyle = "rgb(43,63,174)";
-      let fy = flY + pad.top + 6;
-      for (const [k, v] of flightRows) {
-        g.fillText(k, tx, fy);
-        g.fillText(v, tx + valueColX, fy);
-        fy += lineH;
-      }
+        );
 
       // CG / CP markers on the centreline at their axial stations.
       glyph(X(overlay.cg_cm / 100), oy, "cg");
