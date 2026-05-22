@@ -29,6 +29,44 @@ pub fn embedded_motors() -> &'static [(&'static str, &'static str)] {
     EMBEDDED_MOTORS
 }
 
+// User-registered motor thrust curves (browser session uploads, custom
+// curves). Lookups should walk `embedded_motors()` first then
+// `registered_motors()`. Storage is a `Mutex<Vec<(name, eng_text)>>` —
+// single-threaded on wasm, free-threaded on Tauri.
+use std::sync::{Mutex, OnceLock};
+
+fn registry() -> &'static Mutex<Vec<(String, String)>> {
+    static R: OnceLock<Mutex<Vec<(String, String)>>> = OnceLock::new();
+    R.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Snapshot of every motor `.eng` the user has uploaded this session.
+pub fn registered_motors() -> Vec<(String, String)> {
+    registry().lock().map(|g| g.clone()).unwrap_or_default()
+}
+
+/// Register a user-supplied motor curve (RASP .eng text). Returns the
+/// parsed designation so callers can confirm it's usable. Idempotent on
+/// designation.
+pub fn register_motor(name: &str, eng_text: &str) -> Result<String, Error> {
+    let curve = parse_rasp(eng_text)?;
+    let designation = curve.designation.clone();
+    if let Ok(mut g) = registry().lock() {
+        // Replace any existing entry with the same name so re-uploading
+        // a tweaked motor doesn't accumulate duplicates.
+        g.retain(|(n, _)| n != name);
+        g.push((name.to_string(), eng_text.to_string()));
+    }
+    Ok(designation)
+}
+
+/// Clear all session-registered motors.
+pub fn clear_registered_motors() {
+    if let Ok(mut g) = registry().lock() {
+        g.clear();
+    }
+}
+
 /// `Motor.PLUGGED_DELAY` — a plugged (no-ejection) delay.
 pub const PLUGGED_DELAY: f64 = f64::INFINITY;
 

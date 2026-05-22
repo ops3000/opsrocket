@@ -82,7 +82,77 @@ pub struct SimulationOptions {
     pub use_isa: bool,
     /// Pink-noise RNG seed.
     pub wind_seed: i64,
+    /// Optional altitude-keyed wind profile. When `use_multi_level_wind` is
+    /// true the engine interpolates speed + direction by altitude before
+    /// PinkNoise turbulence; otherwise falls back to `wind_average` /
+    /// `wind_direction`.
+    pub wind_layers: Vec<WindLayer>,
+    pub use_multi_level_wind: bool,
     pub motor: Option<MotorChoice>,
+}
+
+/// Discrete altitude wind layer, mirroring OpenRocket's `MultiLevelWindModel`.
+#[derive(Debug, Clone, Copy)]
+pub struct WindLayer {
+    pub altitude_m: f64,
+    pub speed_ms: f64,
+    pub direction_rad: f64,
+}
+
+/// Linear interpolation of wind speed + direction across a sorted layer
+/// list. Below the lowest layer uses the lowest layer's values; above the
+/// highest uses the highest. Mirrors OpenRocket `MultiLevelWindModel`.
+fn interp_wind_layer(layers: &[WindLayer], altitude_m: f64) -> Option<(f64, f64)> {
+    if layers.is_empty() {
+        return None;
+    }
+    if altitude_m <= layers[0].altitude_m {
+        return Some((layers[0].speed_ms, layers[0].direction_rad));
+    }
+    if altitude_m >= layers[layers.len() - 1].altitude_m {
+        let l = &layers[layers.len() - 1];
+        return Some((l.speed_ms, l.direction_rad));
+    }
+    for w in layers.windows(2) {
+        let lo = &w[0];
+        let hi = &w[1];
+        if altitude_m >= lo.altitude_m && altitude_m <= hi.altitude_m {
+            let span = (hi.altitude_m - lo.altitude_m).max(1.0e-6);
+            let t = (altitude_m - lo.altitude_m) / span;
+            let speed = lo.speed_ms + t * (hi.speed_ms - lo.speed_ms);
+            // Angle interpolation: shortest-arc to avoid wrap-around discontinuities.
+            let mut delta = hi.direction_rad - lo.direction_rad;
+            let pi = std::f64::consts::PI;
+            while delta > pi {
+                delta -= 2.0 * pi;
+            }
+            while delta < -pi {
+                delta += 2.0 * pi;
+            }
+            let dir = lo.direction_rad + t * delta;
+            return Some((speed, dir));
+        }
+    }
+    None
+}
+
+/// Deterministic Gaussian wind-mean shift driven by (std_dev, seed). Uses
+/// a 64-bit LCG to keep the engine free of `rand` dependencies. Returns 0
+/// when std_dev ≤ 0 — the typical "no Monte Carlo" case.
+fn gaussian_wind_shift(std_dev: f64, seed: i64) -> f64 {
+    if std_dev <= 0.0 {
+        return 0.0;
+    }
+    // Mix the seed; ensures non-zero state even when caller passes 0.
+    let mut s: u64 = (seed as u64) ^ 0x9E37_79B9_7F4A_7C15;
+    let mut next = || {
+        s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        ((s >> 32) as u32 as f64) / (u32::MAX as f64 + 1.0)
+    };
+    let u1 = next().max(1.0e-12);
+    let u2 = next();
+    let z = (-2.0_f64 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos();
+    std_dev * z
 }
 
 impl SimulationOptions {
@@ -139,6 +209,8 @@ impl Default for SimulationOptions {
             wind_direction: std::f64::consts::FRAC_PI_2,
             use_isa: true,
             wind_seed: 0,
+            wind_layers: Vec::new(),
+            use_multi_level_wind: false,
             motor: None,
         }
     }
@@ -375,6 +447,12 @@ fn all_motor_blobs() -> Vec<String> {
         .iter()
         .map(|(_, c)| (*c).to_string())
         .collect();
+    // Session-registered (browser uploads, custom curves) — same precedence
+    // as bundled motors. Allows users to assign their own H-motor without
+    // shipping it in the engine binary.
+    for (_, txt) in opsrocket_io::motor::registered_motors() {
+        out.push(txt);
+    }
     for dir in default_motor_dirs() {
         let Ok(rd) = std::fs::read_dir(&dir) else { continue };
         for e in rd.flatten() {
@@ -470,6 +548,16 @@ pub fn simulate_with(
         wind_direction: sim.wind_direction,
         use_isa: sim.use_isa,
         wind_seed: 0,
+        wind_layers: sim
+            .wind_layers
+            .iter()
+            .map(|l| WindLayer {
+                altitude_m: l.altitude_m,
+                speed_ms: l.speed_ms,
+                direction_rad: l.direction_rad,
+            })
+            .collect(),
+        use_multi_level_wind: sim.use_multi_level_wind,
         motor: motors_dir.map(|d| MotorChoice::Designation {
             designation: String::new(),
             search_dir: Some(d.to_path_buf()),
@@ -589,10 +677,22 @@ fn run_multistage(
     // Faithful pink-noise turbulent wind (PinkNoiseWindModel). OpenRocket
     // returns the air-velocity vector and computes airspeed = vel + wind;
     // opsrocket uses v_rel = vel − wind, so we negate OR's vector.
+    //
+    // wind_standard_deviation adds a one-shot Gaussian shift to the mean
+    // wind so successive runs vary launch-to-launch (matches OR's
+    // <windaveragedeviation>). When std_dev = 0 the run is deterministic.
+    //
+    // wind_layers + use_multi_level_wind override the constant
+    // (average, direction) per altitude — interp each step. Layers are
+    // sorted once up-front.
+    let avg_shift = gaussian_wind_shift(opts.wind_standard_deviation, opts.wind_seed);
     let mut wind_model = opsrocket_core::wind::PinkNoiseWindModel::new(opts.wind_seed);
-    wind_model.set_average(opts.wind_average);
+    wind_model.set_average((opts.wind_average + avg_shift).max(0.0));
     wind_model.set_direction(opts.wind_direction);
     wind_model.set_turbulence_intensity(opts.wind_turbulence);
+    let mut sorted_layers = opts.wind_layers.clone();
+    sorted_layers.sort_by(|a, b| a.altitude_m.partial_cmp(&b.altitude_m).unwrap());
+    let use_layers = opts.use_multi_level_wind && !sorted_layers.is_empty();
     fn sample_wind(wm: &mut opsrocket_core::wind::PinkNoiseWindModel, t: f64) -> Vec3 {
         let (wx, wy, _) = wm.wind_velocity(t.max(0.0));
         Vec3::new(-wx, -wy, 0.0)
@@ -755,6 +855,12 @@ fn run_multistage(
     }
 
     while state.t < opts.max_time {
+        if use_layers {
+            if let Some((speed, dir)) = interp_wind_layer(&sorted_layers, state.pos.z) {
+                wind_model.set_average((speed + avg_shift).max(0.0));
+                wind_model.set_direction(dir);
+            }
+        }
         wind = sample_wind(&mut wind_model, state.t);
         let stage_mass = mass_properties_for_stages_active(rocket, &attached);
         let motor_mass = motor_mass_now(state.t, &stage_curves, &attached, &ignition_time);
@@ -1239,8 +1345,9 @@ fn run(
     // Faithful pink-noise turbulent wind (PinkNoiseWindModel). OpenRocket
     // returns the air-velocity vector and computes airspeed = vel + wind;
     // opsrocket uses v_rel = vel − wind, so we negate OR's vector.
+    let avg_shift2 = gaussian_wind_shift(opts.wind_standard_deviation, opts.wind_seed);
     let mut wind_model = opsrocket_core::wind::PinkNoiseWindModel::new(opts.wind_seed);
-    wind_model.set_average(opts.wind_average);
+    wind_model.set_average((opts.wind_average + avg_shift2).max(0.0));
     wind_model.set_direction(opts.wind_direction);
     wind_model.set_turbulence_intensity(opts.wind_turbulence);
     fn sample_wind(wm: &mut opsrocket_core::wind::PinkNoiseWindModel, t: f64) -> Vec3 {

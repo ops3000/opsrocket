@@ -93,38 +93,34 @@ function FieldRow({
   }
 
   if (f.key === "material_name") {
-    // Free text + datalist autocomplete from the bundled catalog. When the
-    // user picks a name that matches a catalog entry, the engine fills the
-    // density automatically.
+    // Catalog picker. The current value is always preserved as a selectable
+    // option even if it's not in the bundled list (handles custom materials
+    // loaded from foreign .ork files).
+    const unit = (k: string) =>
+      k === "bulk" ? "kg/m³" : k === "surface" ? "kg/m²" : "kg/m";
+    const sorted = [...materials].sort((a, b) =>
+      (a.group + a.name).localeCompare(b.group + b.name),
+    );
+    const inCatalog = sorted.some((m) => m.name === modelStr);
+    const options = [
+      ...(inCatalog || !modelStr
+        ? []
+        : [{ value: modelStr, label: `${modelStr} (custom)` }]),
+      ...sorted.map((m) => ({
+        value: m.name,
+        label: `${m.name} — ${m.density} ${unit(m.kind)} · ${m.group}`,
+      })),
+    ];
     return (
-      <label className="prop-row">
+      <div className="prop-row">
         <span className="prop-label">{f.label}</span>
-        <span className="prop-input">
-          <input
-            list="opsrocket-materials"
-            type="text"
-            value={draft}
-            onChange={(e) => {
-              setDirty(true);
-              setDraft(e.target.value);
-            }}
-            onBlur={() => {
-              setDirty(false);
-              if (draft !== modelStr) onCommit(draft);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-            }}
-          />
-          <datalist id="opsrocket-materials">
-            {materials.map((m) => (
-              <option key={m.name} value={m.name}>
-                {m.density} {m.kind === "bulk" ? "kg/m³" : m.kind === "surface" ? "kg/m²" : "kg/m"} · {m.group}
-              </option>
-            ))}
-          </datalist>
-        </span>
-      </label>
+        <Select
+          className="material-select"
+          value={modelStr}
+          onChange={(v) => onCommit(v)}
+          options={options}
+        />
+      </div>
     );
   }
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ConfigPanel,
   MotorInfo,
@@ -6,6 +6,7 @@ import {
   getMotors,
   assignMotor,
   clearMotor,
+  registerMotor,
 } from "../lib/api";
 import { Select } from "./ui/Select";
 
@@ -88,9 +89,45 @@ export function MotorsPanel({
       ),
     );
 
+  const fileInput = useRef<HTMLInputElement>(null);
+  const onImportMotor = async (file: File) => {
+    try {
+      setBusy(true);
+      const text = await file.text();
+      const r = await registerMotor(file.name, text);
+      // Refresh the motors list so the dropdown picks up the new designation.
+      const refreshed = await getMotors();
+      setMotors(refreshed);
+      setErr(`Imported ${r.designation}`);
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className={"motors" + (busy ? " busy" : "")}>
       <div className="motors-top">
+        <button
+          type="button"
+          className="ghost"
+          onClick={() => fileInput.current?.click()}
+          title="Import a custom motor (.eng RASP)"
+        >
+          + Motor…
+        </button>
+        <input
+          ref={fileInput}
+          type="file"
+          accept=".eng,text/plain"
+          style={{ display: "none" }}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) onImportMotor(f);
+            e.target.value = "";
+          }}
+        />
         <label>
           Configuration
           <Select

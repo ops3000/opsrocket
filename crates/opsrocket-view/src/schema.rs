@@ -200,6 +200,120 @@ fn axial_str(a: AxialMethod) -> &'static str {
 }
 const AXIAL: &[&str] = &["after", "top", "bottom", "middle", "absolute"];
 
+fn separation_event_str(e: opsrocket_core::component::SeparationEvent) -> &'static str {
+    use opsrocket_core::component::SeparationEvent::*;
+    match e {
+        Never => "never",
+        Burnout => "burnout",
+        Ejection => "ejection",
+        UpperIgnition => "upper_ignition",
+    }
+}
+const SEPARATION_EVENTS: &[&str] = &["never", "burnout", "ejection", "upper_ignition"];
+fn parse_separation_event(s: &str) -> opsrocket_core::component::SeparationEvent {
+    use opsrocket_core::component::SeparationEvent::*;
+    match s {
+        "burnout" => Burnout,
+        "ejection" => Ejection,
+        "upper_ignition" => UpperIgnition,
+        _ => Never,
+    }
+}
+
+fn ignition_str(e: opsrocket_core::component::IgnitionEvent) -> &'static str {
+    use opsrocket_core::component::IgnitionEvent::*;
+    match e {
+        Automatic => "automatic",
+        Launch => "launch",
+        Burnout => "burnout",
+        Ejection => "ejection",
+        LowerStageSeparation => "lower_stage_separation",
+    }
+}
+const IGNITION_EVENTS: &[&str] = &[
+    "automatic",
+    "launch",
+    "burnout",
+    "ejection",
+    "lower_stage_separation",
+];
+fn parse_ignition_event(s: &str) -> opsrocket_core::component::IgnitionEvent {
+    use opsrocket_core::component::IgnitionEvent::*;
+    match s {
+        "launch" => Launch,
+        "burnout" => Burnout,
+        "ejection" => Ejection,
+        "lower_stage_separation" => LowerStageSeparation,
+        _ => Automatic,
+    }
+}
+fn apply_motor_mount_edit(
+    mm: &mut Option<opsrocket_core::component::MotorMount>,
+    key: &str,
+    v: &Value,
+) -> Result<(), String> {
+    use opsrocket_core::component::{IgnitionEvent, MotorMount};
+    match key {
+        "motor_mount_present" => {
+            let present = as_bool(v)?;
+            if present && mm.is_none() {
+                *mm = Some(MotorMount {
+                    overhang: 0.0,
+                    ignition_event: IgnitionEvent::Automatic,
+                    ignition_delay: 0.0,
+                    motors: Vec::new(),
+                });
+            } else if !present {
+                *mm = None;
+            }
+            Ok(())
+        }
+        "motor_mount_overhang" => {
+            if let Some(m) = mm {
+                m.overhang = as_f64(v)? / M2MM;
+            }
+            Ok(())
+        }
+        "motor_mount_ignition_event" => {
+            if let Some(m) = mm {
+                m.ignition_event = parse_ignition_event(&as_str(v)?);
+            }
+            Ok(())
+        }
+        "motor_mount_ignition_delay" => {
+            if let Some(m) = mm {
+                m.ignition_delay = as_f64(v)?;
+            }
+            Ok(())
+        }
+        _ => Err(format!("unknown motor mount field {key}")),
+    }
+}
+
+fn push_motor_mount_fields(
+    f: &mut Vec<Field>,
+    mm: Option<&opsrocket_core::component::MotorMount>,
+) {
+    let from = f.len();
+    let has_mount = mm.is_some();
+    f.push(f_bool("motor_mount_present", "Is motor mount", has_mount));
+    if let Some(m) = mm {
+        f.push(f_len("motor_mount_overhang", "Overhang", m.overhang));
+        f.push(f_enum(
+            "motor_mount_ignition_event",
+            "Ignition event",
+            ignition_str(m.ignition_event),
+            IGNITION_EVENTS,
+        ));
+        f.push(f_num(
+            "motor_mount_ignition_delay",
+            "Ignition delay (s)",
+            m.ignition_delay,
+        ));
+    }
+    tag_section(f, from, "motor");
+}
+
 fn common_fields(c: &Common) -> Vec<Field> {
     let mut v = Vec::new();
 
@@ -297,6 +411,7 @@ fn fields_for(comp: &Component) -> Vec<Field> {
             f.push(f_opt_len("radius", "Outer radius (<0=auto)", b.radius));
             f.push(f_len("thickness", "Wall thickness", b.thickness));
             tag_section(&mut f, gen_from, "general");
+            push_motor_mount_fields(&mut f, b.motor_mount.as_ref());
         }
         Component::Transition(t) => {
             let gen_from = f.len();
@@ -321,9 +436,12 @@ fn fields_for(comp: &Component) -> Vec<Field> {
             tag_section(&mut f, sh_from, "shoulder");
         }
         Component::InnerTube(it) => {
+            let gen_from = f.len();
             f.push(f_len("length", "Length", it.length));
             f.push(f_len("outer_radius", "Outer radius", it.outer_radius));
             f.push(f_len("inner_radius", "Inner radius", it.inner_radius));
+            tag_section(&mut f, gen_from, "general");
+            push_motor_mount_fields(&mut f, it.motor_mount.as_ref());
         }
         Component::MassObject(m) => {
             f.push(f_len("length", "Length", m.length));
@@ -371,7 +489,18 @@ fn fields_for(comp: &Component) -> Vec<Field> {
             f.push(f_int("instance_count", "Count", c.instance_count));
         }
         Component::FinSet(fs) => {
+            let gen_from = f.len();
             f.push(f_int("fin_count", "Fin count", fs.fin_count));
+            f.push(f_enum(
+                "shape",
+                "Planform",
+                match fs.shape {
+                    FinShape::Trapezoidal => "trapezoidal",
+                    FinShape::Elliptical => "elliptical",
+                    FinShape::Freeform => "freeform",
+                },
+                &["trapezoidal", "elliptical", "freeform"],
+            ));
             f.push(f_len("root_chord", "Root chord", fs.root_chord));
             f.push(f_len("tip_chord", "Tip chord", fs.tip_chord));
             f.push(f_len("sweep_length", "Sweep length", fs.sweep_length));
@@ -388,6 +517,23 @@ fn fields_for(comp: &Component) -> Vec<Field> {
                 },
                 &["square", "rounded", "airfoil"],
             ));
+            tag_section(&mut f, gen_from, "general");
+            // Root tab (fin section buried inside the body tube) + fillets.
+            let tab_from = f.len();
+            f.push(f_len("tab_length", "Tab length", fs.tab_length));
+            f.push(f_len("tab_height", "Tab height", fs.tab_height));
+            f.push(f_len("fillet_radius", "Fillet radius", fs.fillet_radius));
+            tag_section(&mut f, tab_from, "shoulder"); // reuse the "tabs/root" group
+            // Freeform points — exposed as a JSON-encoded text field for v1.
+            if matches!(fs.shape, FinShape::Freeform) {
+                let from = f.len();
+                f.push(f_text(
+                    "freeform_points",
+                    "Freeform points (JSON)",
+                    &serde_json::to_string(&fs.points).unwrap_or_default(),
+                ));
+                tag_section(&mut f, from, "general");
+            }
         }
         Component::PodSet(p) => {
             f.push(f_int("instance_count", "Instances", p.instance_count));
@@ -434,8 +580,12 @@ pub fn ensure_ids(rocket: &mut Rocket) {
             set_id(c, format!("auto-{}", *n));
         }
         *n += 1;
-        let kids = match c {
+        let kids: Option<&mut Vec<Component>> = match c {
             Component::BodyTube(t) => Some(&mut t.children),
+            Component::NoseCone(n) => Some(&mut n.children),
+            Component::Transition(t) => Some(&mut t.children),
+            Component::InnerTube(it) => Some(&mut it.children),
+            Component::CenteringRing(cr) => Some(&mut cr.children),
             Component::PodSet(p) => Some(&mut p.children),
             _ => None,
         };
@@ -485,8 +635,15 @@ pub fn build_tree(rocket: &Rocket) -> Vec<EditNode> {
             depth,
             fields: fields_for(c),
         });
-        let kids = match c {
+        // Every variant that holds nested components: descend so the GUI
+        // tree mirrors what the engine actually walks (and the user can
+        // edit / delete the nested parts).
+        let kids: Option<&Vec<Component>> = match c {
             Component::BodyTube(t) => Some(&t.children),
+            Component::NoseCone(n) => Some(&n.children),
+            Component::Transition(t) => Some(&t.children),
+            Component::InnerTube(it) => Some(&it.children),
+            Component::CenteringRing(cr) => Some(&cr.children),
             Component::PodSet(p) => Some(&p.children),
             _ => None,
         };
@@ -497,6 +654,16 @@ pub fn build_tree(rocket: &Rocket) -> Vec<EditNode> {
         }
     }
     for (si, st) in rocket.stages.iter().enumerate() {
+        let stage_fields = vec![
+            f_text("name", "Name", &st.common.name),
+            f_enum(
+                "separation_event",
+                "Separation event",
+                separation_event_str(st.separation_event),
+                SEPARATION_EVENTS,
+            ),
+            f_num("separation_delay", "Separation delay (s)", st.separation_delay),
+        ];
         out.push(EditNode {
             id: st.common.id.0.clone(),
             kind: "Stage".into(),
@@ -506,7 +673,7 @@ pub fn build_tree(rocket: &Rocket) -> Vec<EditNode> {
                 st.common.name.clone()
             },
             depth: 0,
-            fields: vec![f_text("name", "Name", &st.common.name)],
+            fields: stage_fields,
         });
         for ch in &st.children {
             walk(ch, 1, &mut out);
@@ -520,8 +687,12 @@ fn find_mut<'a>(rocket: &'a mut Rocket, id: &str) -> Option<&'a mut Component> {
         if c.common().id.0 == id {
             return Some(c);
         }
-        let kids = match c {
+        let kids: Option<&mut Vec<Component>> = match c {
             Component::BodyTube(t) => Some(&mut t.children),
+            Component::NoseCone(n) => Some(&mut n.children),
+            Component::Transition(t) => Some(&mut t.children),
+            Component::InnerTube(it) => Some(&mut it.children),
+            Component::CenteringRing(cr) => Some(&mut cr.children),
             Component::PodSet(p) => Some(&mut p.children),
             _ => None,
         };
@@ -689,9 +860,20 @@ pub fn apply_edit(rocket: &mut Rocket, id: &str, key: &str, v: &Value) -> Result
     // Stage rename.
     for (si, st) in rocket.stages.iter_mut().enumerate() {
         if st.common.id.0 == id {
-            if key == "name" {
-                st.common.name = as_str(v)?;
-                return Ok(());
+            match key {
+                "name" => {
+                    st.common.name = as_str(v)?;
+                    return Ok(());
+                }
+                "separation_event" => {
+                    st.separation_event = parse_separation_event(&as_str(v)?);
+                    return Ok(());
+                }
+                "separation_delay" => {
+                    st.separation_delay = as_f64(v)?.max(0.0);
+                    return Ok(());
+                }
+                _ => {}
             }
             let _ = si;
             return Err(format!("stage has no field {key}"));
@@ -740,6 +922,9 @@ pub fn apply_edit(rocket: &mut Rocket, id: &str, key: &str, v: &Value) -> Result
                 b.radius = if r < 0.0 { None } else { Some(r) };
             }
             "thickness" => b.thickness = mm(v)?,
+            k if k.starts_with("motor_mount") => {
+                apply_motor_mount_edit(&mut b.motor_mount, k, v)?;
+            }
             _ => return Err(format!("BodyTube has no field {key}")),
         },
         Component::Transition(t) => match key {
@@ -765,6 +950,9 @@ pub fn apply_edit(rocket: &mut Rocket, id: &str, key: &str, v: &Value) -> Result
             "length" => it.length = mm(v)?,
             "outer_radius" => it.outer_radius = mm(v)?,
             "inner_radius" => it.inner_radius = mm(v)?,
+            k if k.starts_with("motor_mount") => {
+                apply_motor_mount_edit(&mut it.motor_mount, k, v)?;
+            }
             _ => return Err(format!("InnerTube has no field {key}")),
         },
         Component::MassObject(m) => match key {
@@ -819,6 +1007,13 @@ pub fn apply_edit(rocket: &mut Rocket, id: &str, key: &str, v: &Value) -> Result
         },
         Component::FinSet(fs) => match key {
             "fin_count" => fs.fin_count = as_u32(v)?.max(1),
+            "shape" => {
+                fs.shape = match as_str(v)?.as_str() {
+                    "elliptical" => FinShape::Elliptical,
+                    "freeform" => FinShape::Freeform,
+                    _ => FinShape::Trapezoidal,
+                }
+            }
             "root_chord" => fs.root_chord = mm(v)?,
             "tip_chord" => fs.tip_chord = mm(v)?,
             "sweep_length" => fs.sweep_length = mm(v)?,
@@ -830,6 +1025,15 @@ pub fn apply_edit(rocket: &mut Rocket, id: &str, key: &str, v: &Value) -> Result
                     "rounded" => FinCrossSection::Rounded,
                     "airfoil" => FinCrossSection::Airfoil,
                     _ => FinCrossSection::Square,
+                }
+            }
+            "tab_length" => fs.tab_length = mm(v)?,
+            "tab_height" => fs.tab_height = mm(v)?,
+            "fillet_radius" => fs.fillet_radius = mm(v)?,
+            "freeform_points" => {
+                let s = as_str(v)?;
+                if let Ok(pts) = serde_json::from_str::<Vec<[f64; 2]>>(&s) {
+                    fs.points = pts;
                 }
             }
             _ => return Err(format!("FinSet has no field {key}")),
@@ -861,8 +1065,12 @@ pub fn delete_component(rocket: &mut Rocket, id: &str) -> Result<(), String> {
             return true;
         }
         for c in children.iter_mut() {
-            let kids = match c {
+            let kids: Option<&mut Vec<Component>> = match c {
                 Component::BodyTube(t) => Some(&mut t.children),
+                Component::NoseCone(n) => Some(&mut n.children),
+                Component::Transition(t) => Some(&mut t.children),
+                Component::InnerTube(it) => Some(&mut it.children),
+                Component::CenteringRing(cr) => Some(&mut cr.children),
                 Component::PodSet(p) => Some(&mut p.children),
                 _ => None,
             };

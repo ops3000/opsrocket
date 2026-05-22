@@ -406,7 +406,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "edit_apply",
     description:
-      'Apply a batch of edit ops and return the new ork_b64 + a stability/tree snapshot. Ops: patch_field{id,key,value} | add_component{parent_id,kind} | delete_component{id} | patch_sim{sim_name,key,value} | assign_motor{mount_id,config_id,designation,digest?,ejection_delay?} | clear_motor{mount_id,config_id} | set_ignition{mount_id,event,delay?} | apply_preset{id,preset_id}.',
+      'Apply a batch of edit ops and return the new ork_b64 + a stability/tree snapshot. Ops: patch_field{id,key,value} | add_component{parent_id,kind} | delete_component{id} | patch_sim{sim_name,key,value} | assign_motor{mount_id,config_id,designation,digest?,ejection_delay?} | clear_motor{mount_id,config_id} | set_ignition{mount_id,event,delay?} | apply_preset{id,preset_id} | add_config{id?,name?} | rename_config{id,name} | delete_config{id} | set_active_stages{id,active:[stage_index,...]}.',
     inputSchema: {
       ...ROCKET_INPUT,
       ops: z
@@ -572,6 +572,29 @@ export const TOOLS: ToolDef[] = [
           count: m.length,
           motors: m.slice(0, (a.limit as number) ?? 100),
         });
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  },
+
+  {
+    name: "register_motor",
+    description:
+      "Register a user-supplied motor by pasting its RASP .eng text. Adds it to the session catalog so subsequent assign_motor / simulate calls can use the designation. Returns the parsed designation. Browser-only — survives within a session.",
+    inputSchema: {
+      name: z
+        .string()
+        .describe("File-style name, e.g. \"my-custom-K560.eng\""),
+      eng_text: z
+        .string()
+        .describe("Full .eng file body (RASP text format)"),
+    },
+    handler: async (a) => {
+      try {
+        const name = a.name as string;
+        const txt = a.eng_text as string;
+        return ok(JSON.parse(ops.mcp_register_motor(name, txt)));
       } catch (e) {
         return fail(e);
       }

@@ -111,6 +111,12 @@ pub fn motor_catalog() -> Vec<MotorInfo> {
         .iter()
         .filter_map(|(f, t)| motor_info(f, t))
         .collect();
+    // Session-registered (user-imported) thrust curves.
+    for (f, t) in opsrocket_io::motor::registered_motors() {
+        if let Some(m) = motor_info(&f, &t) {
+            out.push(m);
+        }
+    }
     sort_catalog(&mut out);
     out
 }
@@ -294,6 +300,113 @@ pub fn clear_motor(rocket: &mut Rocket, mount_id: &str, config_id: &str) -> Resu
     let mm = find_mount_mut(rocket, mount_id)
         .ok_or_else(|| format!("motor mount {mount_id} not found"))?;
     mm.motors.retain(|a| a.config_id != config_id);
+    Ok(())
+}
+
+/// Add a new flight configuration. Generates a fresh `cfg-N` id if none is
+/// supplied. Becomes the default if it's the first one. Returns the new id.
+pub fn add_config(
+    rocket: &mut Rocket,
+    id: Option<&str>,
+    name: Option<&str>,
+) -> Result<String, String> {
+    let cid = match id {
+        Some(s) if !s.is_empty() => s.to_string(),
+        _ => {
+            let mut n = rocket.configurations.len();
+            loop {
+                let candidate = format!("cfg-{n}");
+                if !rocket.configurations.iter().any(|c| c.config_id == candidate) {
+                    break candidate;
+                }
+                n += 1;
+            }
+        }
+    };
+    if rocket.configurations.iter().any(|c| c.config_id == cid) {
+        return Err(format!("configuration {cid} already exists"));
+    }
+    let was_first = rocket.configurations.is_empty();
+    rocket.configurations.push(FlightConfiguration {
+        config_id: cid.clone(),
+        name: name.map(String::from),
+        active_stages: (0..rocket.stages.len() as u32).collect(),
+    });
+    if was_first && rocket.default_config.is_none() {
+        rocket.default_config = Some(cid.clone());
+    }
+    Ok(cid)
+}
+
+pub fn rename_config(
+    rocket: &mut Rocket,
+    id: &str,
+    name: &str,
+) -> Result<(), String> {
+    let cfg = rocket
+        .configurations
+        .iter_mut()
+        .find(|c| c.config_id == id)
+        .ok_or_else(|| format!("configuration {id} not found"))?;
+    cfg.name = if name.is_empty() { None } else { Some(name.to_string()) };
+    Ok(())
+}
+
+pub fn delete_config(rocket: &mut Rocket, id: &str) -> Result<(), String> {
+    let before = rocket.configurations.len();
+    rocket.configurations.retain(|c| c.config_id != id);
+    if rocket.configurations.len() == before {
+        return Err(format!("configuration {id} not found"));
+    }
+    // Drop motor assignments tied to the deleted config.
+    fn walk(comps: &mut Vec<opsrocket_core::component::Component>, id: &str) {
+        use opsrocket_core::component::Component;
+        for c in comps {
+            let mm = match c {
+                Component::BodyTube(b) => b.motor_mount.as_mut(),
+                Component::InnerTube(it) => it.motor_mount.as_mut(),
+                _ => None,
+            };
+            if let Some(mm) = mm {
+                mm.motors.retain(|a| a.config_id != id);
+            }
+            let kids = match c {
+                Component::BodyTube(t) => Some(&mut t.children),
+                Component::NoseCone(n) => Some(&mut n.children),
+                Component::Transition(t) => Some(&mut t.children),
+                Component::InnerTube(it) => Some(&mut it.children),
+                Component::CenteringRing(cr) => Some(&mut cr.children),
+                Component::PodSet(p) => Some(&mut p.children),
+                _ => None,
+            };
+            if let Some(kids) = kids {
+                walk(kids, id);
+            }
+        }
+    }
+    for st in &mut rocket.stages {
+        walk(&mut st.children, id);
+    }
+    if rocket.default_config.as_deref() == Some(id) {
+        rocket.default_config = rocket
+            .configurations
+            .first()
+            .map(|c| c.config_id.clone());
+    }
+    Ok(())
+}
+
+pub fn set_active_stages(
+    rocket: &mut Rocket,
+    id: &str,
+    active: &[u32],
+) -> Result<(), String> {
+    let cfg = rocket
+        .configurations
+        .iter_mut()
+        .find(|c| c.config_id == id)
+        .ok_or_else(|| format!("configuration {id} not found"))?;
+    cfg.active_stages = active.to_vec();
     Ok(())
 }
 

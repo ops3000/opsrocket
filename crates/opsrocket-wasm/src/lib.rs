@@ -422,6 +422,67 @@ pub fn mcp_mass_breakdown(bytes: &[u8]) -> Result<String, JsError> {
 }
 
 #[wasm_bindgen]
+pub fn mcp_register_motor(name: &str, eng_text: &str) -> Result<String, JsError> {
+    let designation = opsrocket_io::motor::register_motor(name, eng_text)
+        .map_err(|e| jerr(e.to_string()))?;
+    ok_json(json!({
+        "engine_version": ENGINE_VERSION,
+        "designation": designation,
+        "registered": name,
+    }))
+}
+
+#[wasm_bindgen]
+pub fn mcp_clear_registered_motors() -> Result<String, JsError> {
+    opsrocket_io::motor::clear_registered_motors();
+    ok_json(json!({ "engine_version": ENGINE_VERSION, "ok": true }))
+}
+
+#[wasm_bindgen]
+pub fn mcp_flight_columns() -> Result<String, JsError> {
+    ok_json(json!({
+        "engine_version": ENGINE_VERSION,
+        "columns": opsrocket_sim::output::FLIGHT_DATA_COLUMNS,
+    }))
+}
+
+#[wasm_bindgen]
+pub fn mcp_export_flight_csv(
+    bytes: &[u8],
+    sim_name: Option<String>,
+    columns_json: Option<String>,
+) -> Result<String, JsError> {
+    let doc = doc_from(bytes)?;
+    let chosen = sim_name
+        .as_deref()
+        .or_else(|| doc.simulations.first().map(|s| s.name.as_str()))
+        .ok_or_else(|| jerr("no simulation"))?;
+    let result = opsrocket_sim::engine::simulate(&doc, chosen)
+        .map_err(|e| jerr(e.to_string()))?;
+    let selected: Option<Vec<usize>> = columns_json.and_then(|s| {
+        serde_json::from_str::<Vec<String>>(&s).ok().map(|names| {
+            names
+                .iter()
+                .filter_map(|n| {
+                    opsrocket_sim::output::FLIGHT_DATA_COLUMNS
+                        .iter()
+                        .position(|c| *c == n)
+                })
+                .collect()
+        })
+    });
+    let mut buf = Vec::new();
+    if let Some(sel) = &selected {
+        opsrocket_sim::output::write_csv_selected(&mut buf, &result, Some(sel))
+            .map_err(|e| jerr(e.to_string()))?;
+    } else {
+        opsrocket_sim::output::write_csv(&mut buf, &result)
+            .map_err(|e| jerr(e.to_string()))?;
+    }
+    String::from_utf8(buf).map_err(|e| jerr(e.to_string()))
+}
+
+#[wasm_bindgen]
 pub fn mcp_sim_warnings(bytes: &[u8], sim_name: Option<String>) -> Result<String, JsError> {
     let doc = doc_from(bytes)?;
     let warnings = opsrocket_view::warnings::sim_warnings(&doc, sim_name.as_deref());
@@ -653,6 +714,50 @@ pub fn mcp_edit_apply(bytes: &[u8], ops_json: &str) -> Result<Vec<u8>, JsError> 
                 s(op, "event")?,
                 op.get("delay").and_then(Value::as_f64).unwrap_or(0.0),
             ),
+            "add_config" => (|| -> Result<(), String> {
+                let id = op.get("id").and_then(Value::as_str);
+                let name = op.get("name").and_then(Value::as_str);
+                opsrocket_view::motors::add_config(&mut doc.rocket, id, name)
+                    .map(|_| ())
+            })(),
+            "rename_config" => (|| -> Result<(), String> {
+                let id = op
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "missing id".to_string())?;
+                let name = op
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                opsrocket_view::motors::rename_config(&mut doc.rocket, id, name)
+            })(),
+            "delete_config" => (|| -> Result<(), String> {
+                let id = op
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "missing id".to_string())?;
+                opsrocket_view::motors::delete_config(&mut doc.rocket, id)
+            })(),
+            "set_active_stages" => (|| -> Result<(), String> {
+                let id = op
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "missing id".to_string())?;
+                let stages: Vec<u32> = op
+                    .get("active")
+                    .and_then(Value::as_array)
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_u64().map(|n| n as u32))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                opsrocket_view::motors::set_active_stages(
+                    &mut doc.rocket,
+                    id,
+                    &stages,
+                )
+            })(),
             "apply_preset" => (|| -> Result<(), String> {
                 let preset_id = op
                     .get("preset_id")

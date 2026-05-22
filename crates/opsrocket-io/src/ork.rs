@@ -148,6 +148,18 @@ pub fn read_ork(path: impl AsRef<Path>) -> Result<OrkDocument> {
 /// Load a `.ork` from an in-memory byte buffer (no filesystem — the WASM /
 /// browser entry point; native callers can use [`read_ork`]).
 pub fn read_ork_bytes(bytes: &[u8]) -> Result<OrkDocument> {
+    // RockSim `.rkt` is a top-level XML file, not a zip — detect it early
+    // so the user gets a clear message instead of a cryptic ZIP error.
+    let head = std::str::from_utf8(&bytes[..bytes.len().min(256)]).unwrap_or("");
+    let stripped = head.trim_start();
+    if stripped.starts_with("<?xml") && stripped.contains("RockSimDocument") {
+        return Err(Error::Malformed(
+            "RockSim .rkt import is not implemented yet. Open the file in \
+             OpenRocket and re-save as .ork, or convert via the OpenRocket \
+             GUI's File → Export."
+                .into(),
+        ));
+    }
     read_ork_zip(zip::ZipArchive::new(Cursor::new(bytes))?)
 }
 
@@ -251,15 +263,65 @@ fn parse_rocket(reader: &mut Reader<&[u8]>) -> Result<Rocket> {
                                 _ => {}
                             }
                         }
-                        // skip until matching end - we don't model active stages yet
-                        skip_to_end(reader, b"motorconfiguration")?;
+                        // Parse <name> + <stage> children; ignore unknown tags.
+                        let mut cfg_name: Option<String> = None;
+                        let mut active_stages: Vec<u32> = Vec::new();
+                        let mut cfg_buf = Vec::new();
+                        loop {
+                            match reader.read_event_into(&mut cfg_buf)? {
+                                Event::Start(ee) => match ee.name().as_ref() {
+                                    b"name" => cfg_name = Some(read_text(reader, b"name")?),
+                                    b"stage" => {
+                                        let mut active = true;
+                                        let mut number: Option<u32> = None;
+                                        for attr in ee.attributes().with_checks(false).flatten() {
+                                            match attr.key.as_ref() {
+                                                b"number" => {
+                                                    if let Ok(n) =
+                                                        attr.unescape_value()?.parse::<u32>()
+                                                    {
+                                                        number = Some(n);
+                                                    }
+                                                }
+                                                b"active" => {
+                                                    active = matches!(
+                                                        attr.unescape_value()?.as_ref(),
+                                                        "true"
+                                                    );
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                        if active {
+                                            if let Some(n) = number {
+                                                active_stages.push(n);
+                                            }
+                                        }
+                                        skip_to_end(reader, b"stage")?;
+                                    }
+                                    other => skip_to_end(reader, other)?,
+                                },
+                                Event::End(ee)
+                                    if ee.name().as_ref() == b"motorconfiguration" =>
+                                {
+                                    break
+                                }
+                                Event::Eof => {
+                                    return Err(Error::Malformed(
+                                        "EOF inside <motorconfiguration>".into(),
+                                    ))
+                                }
+                                _ => {}
+                            }
+                            cfg_buf.clear();
+                        }
                         if default {
                             rocket.default_config = Some(config_id.clone());
                         }
                         rocket.configurations.push(FlightConfiguration {
                             config_id,
-                            name: None,
-                            active_stages: Vec::new(),
+                            name: cfg_name,
+                            active_stages,
                         });
                     }
                     b"subcomponents" => {

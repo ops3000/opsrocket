@@ -84,6 +84,8 @@
           return J(w.session_redo());
         case "motors":
           return J(w.session_motors());
+        case "register_motor":
+          return J(w.mcp_register_motor(body.name || "user.eng", body.eng_text || ""));
         case "list_materials":
           return J(w.mcp_list_materials());
         case "list_presets":
@@ -91,6 +93,20 @@
         case "sim_warnings": {
           const bytes = w.session_save();
           return J(w.mcp_sim_warnings(bytes, body.sim_name));
+        }
+        case "flight_columns":
+          return J(w.mcp_flight_columns());
+        case "export_flight_csv": {
+          const bytes = w.session_save();
+          const csv = w.mcp_export_flight_csv(
+            bytes,
+            body.sim_name,
+            body.columns ? JSON.stringify(body.columns) : undefined,
+          );
+          return new Response(csv, {
+            status: 200,
+            headers: { "content-type": "text/csv" },
+          });
         }
         case "component_mass": {
           // body.id = component id; takes the current session's bytes.

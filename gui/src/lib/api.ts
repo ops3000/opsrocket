@@ -178,6 +178,30 @@ export const simWarnings = (
   sim_name?: string,
 ): Promise<{ warnings: SimWarning[] }> =>
   req("sim_warnings", "POST", { sim_name });
+
+export const listFlightColumns = (): Promise<{ columns: string[] }> =>
+  req("flight_columns", "GET");
+
+export const registerMotor = (
+  name: string,
+  eng_text: string,
+): Promise<{ designation: string; registered: string }> =>
+  req("register_motor", "POST", { name, eng_text });
+
+// Full-fidelity CSV: runs the sim and writes the selected OpenRocket
+// columns. Returns the CSV body as text.
+export async function exportFlightCsvFull(
+  sim_name: string | null,
+  columns: string[] | null,
+): Promise<string> {
+  const r = await fetch("/api/export_flight_csv", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sim_name, columns }),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.text();
+}
 export interface EditNode {
   id: string;
   kind: string;

@@ -70,11 +70,34 @@ pub const FLIGHT_DATA_COLUMNS: &[&str] = &[
 
 /// Write a simulation result as CSV.
 pub fn write_csv<W: Write>(out: &mut W, result: &SimulationResult) -> std::io::Result<()> {
-    writeln!(out, "{}", FLIGHT_DATA_COLUMNS.join(","))?;
+    write_csv_selected(out, result, None)
+}
+
+/// Write a simulation result as CSV with optional column whitelist. When
+/// `keep` is `Some`, only those column indices (referencing
+/// `FLIGHT_DATA_COLUMNS`) are emitted. The `Time` column is always kept.
+pub fn write_csv_selected<W: Write>(
+    out: &mut W,
+    result: &SimulationResult,
+    keep: Option<&[usize]>,
+) -> std::io::Result<()> {
+    let indices: Vec<usize> = match keep {
+        Some(sel) => {
+            let mut v: Vec<usize> = std::iter::once(0)
+                .chain(sel.iter().copied().filter(|&i| i != 0 && i < FLIGHT_DATA_COLUMNS.len()))
+                .collect();
+            v.dedup();
+            v
+        }
+        None => (0..FLIGHT_DATA_COLUMNS.len()).collect(),
+    };
+    let header: Vec<&str> = indices.iter().map(|&i| FLIGHT_DATA_COLUMNS[i]).collect();
+    writeln!(out, "{}", header.join(","))?;
     for row in &result.rows {
-        let line: Vec<String> = row
+        let line: Vec<String> = indices
             .iter()
-            .map(|v| {
+            .map(|&i| {
+                let v = *row.get(i).unwrap_or(&f64::NAN);
                 if v.is_nan() {
                     "NaN".to_string()
                 } else {

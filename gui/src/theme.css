@@ -381,9 +381,27 @@ input[type="checkbox"]:focus-visible {
   overflow: hidden;
 }
 
+.col-divider {
+  cursor: col-resize;
+  background: var(--line);
+  position: relative;
+  touch-action: none;
+  /* 1 px visible (matches the prior inspector border-left). */
+}
+.col-divider:hover,
+.col-divider:active {
+  background: var(--accent);
+}
+/* Wider invisible hit target so the user doesn't need pixel-perfect aim. */
+.col-divider::before {
+  content: "";
+  position: absolute;
+  inset: 0 -6px;
+  cursor: col-resize;
+}
+
 .inspector {
   background: var(--panel);
-  border-left: 1px solid var(--line);
   overflow-y: auto;
   padding: 12px;
 }
@@ -400,6 +418,7 @@ input[type="checkbox"]:focus-visible {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
+  gap: 10px;
   padding-bottom: 8px;
   margin-bottom: 8px;
   border-bottom: 1px solid var(--line);
@@ -431,6 +450,168 @@ input[type="checkbox"]:focus-visible {
   box-shadow: 0 24px 56px rgba(0, 0, 0, 0.25);
   overflow: hidden;
 }
+.sim-modal {
+  width: min(880px, calc(100vw - 60px));
+  height: min(600px, calc(100vh - 80px));
+}
+.sim-modal-head { gap: 12px; align-items: start; }
+.sim-modal-head-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 12px;
+  row-gap: 4px;
+  align-items: center;
+}
+.sim-head-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.sim-head-value { font-size: 12px; color: var(--ink); }
+.sim-name-input {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: var(--radius);
+  padding: 4px 10px;
+  font-size: 13px;
+  color: var(--ink);
+  min-width: 260px;
+  max-width: 360px;
+}
+.sim-status {
+  font-size: 12px;
+  font-weight: 600;
+}
+.sim-status-ok { color: var(--good, #2a8a2a); }
+.sim-status-info { color: var(--muted); }
+.sim-status-warn { color: rgb(218, 134, 0); }
+.sim-status-error { color: rgb(220, 30, 80); }
+
+.sim-launch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px 14px;
+}
+.sim-fieldset {
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px 14px 8px;
+  margin: 0;
+  background: rgba(255, 255, 255, 0.5);
+}
+.sim-fieldset > legend {
+  position: absolute;
+  top: -8px;
+  left: 12px;
+  background: #fffaf0;
+  padding: 0 8px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+.sim-row {
+  display: grid;
+  grid-template-columns: 110px 70px 26px 1fr;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  font-size: 12px;
+}
+.sim-row.sim-row-bool {
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+}
+.sim-row.sim-row-enum {
+  grid-template-columns: 130px 1fr;
+}
+.sim-row.sim-row-static {
+  grid-template-columns: 130px 1fr;
+}
+.sim-static {
+  color: var(--ink);
+  font-size: 12px;
+}
+.sim-row.disabled .sim-label,
+.sim-row.disabled .sim-static {
+  color: var(--muted);
+}
+.sim-row.disabled .sim-input,
+.sim-row.disabled .sim-slider {
+  opacity: 0.45;
+}
+.sim-label {
+  color: var(--ink);
+  font-size: 12px;
+}
+.sim-row .sim-input {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: var(--radius);
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--ink);
+  width: 100%;
+  font-variant-numeric: tabular-nums;
+}
+.sim-unit {
+  color: var(--muted);
+  font-size: 11px;
+}
+.sim-slider {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  height: 4px;
+  background: var(--line);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+.sim-slider::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  border: none;
+}
+.sim-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  border: none;
+}
+.sim-enum { width: 100% !important; }
+
+.csv-toolbar {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.csv-toolbar button { padding: 4px 12px; font-size: 12px; }
+.csv-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 2px 12px;
+  max-height: 280px;
+  overflow-y: auto;
+  font-size: 12px;
+}
+.csv-col {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  cursor: pointer;
+}
+.csv-col input { margin: 0; }
 .modal-head {
   display: flex;
   justify-content: space-between;
@@ -525,10 +706,22 @@ input[type="checkbox"]:focus-visible {
   border-radius: 999px;
   font-size: 11px;
   cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+/* Override the global button:hover (which paints --accent-dark on every
+   button) so the tab pill keeps its lightweight chip look on hover. */
+.prop-tab:hover {
+  background: rgba(255, 45, 120, 0.08);
+  border-color: var(--accent);
+  color: var(--ink);
 }
 .prop-tab.active {
   background: var(--accent);
   border-color: var(--accent);
+  color: #fff;
+}
+.prop-tab.active:hover {
+  background: var(--accent);
   color: #fff;
 }
 
@@ -882,6 +1075,7 @@ footer b { color: var(--accent); }
 }
 .uisel.simsel { width: 230px; }
 .prop-row .uisel { width: 110px; }
+.prop-row .uisel.material-select { width: 220px; }
 .analysis .uisel { width: 160px; }
 .motors-top .uisel { min-width: 170px; }
 .uisel-trigger {
@@ -927,7 +1121,8 @@ footer b { color: var(--accent); }
 .uisel-chev.up { transform: rotate(180deg); }
 .uisel-list {
   position: absolute;
-  z-index: 30;
+  /* Above the modal backdrop (z-1000) so dropdowns inside modals show. */
+  z-index: 1100;
   /* portalled to <body>, so it can't inherit .uisel's 13px — pin it */
   font-size: 13px;
   top: calc(100% + 4px);

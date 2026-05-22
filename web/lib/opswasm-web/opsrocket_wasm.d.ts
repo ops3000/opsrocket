@@ -5,6 +5,8 @@ export function mcp_analysis(bytes: Uint8Array, mach: number): string;
 
 export function mcp_capabilities(): string;
 
+export function mcp_clear_registered_motors(): string;
+
 export function mcp_component_mass(bytes: Uint8Array, comp_id: string): string;
 
 /**
@@ -14,7 +16,11 @@ export function mcp_component_mass(bytes: Uint8Array, comp_id: string): string;
  */
 export function mcp_edit_apply(bytes: Uint8Array, ops_json: string): Uint8Array;
 
+export function mcp_export_flight_csv(bytes: Uint8Array, sim_name?: string | null, columns_json?: string | null): string;
+
 export function mcp_extract_or_reference(bytes: Uint8Array, index?: number | null): string;
+
+export function mcp_flight_columns(): string;
 
 export function mcp_inspect(bytes: Uint8Array): string;
 
@@ -31,6 +37,8 @@ export function mcp_new_document(): Uint8Array;
 export function mcp_optimize(bytes: Uint8Array, params_json: string): string;
 
 export function mcp_parity(bytes: Uint8Array, index?: number | null): string;
+
+export function mcp_register_motor(name: string, eng_text: string): string;
 
 export function mcp_sim_warnings(bytes: Uint8Array, sim_name?: string | null): string;
 
@@ -93,9 +101,12 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly mcp_analysis: (a: number, b: number, c: number) => [number, number, number, number];
     readonly mcp_capabilities: () => [number, number, number, number];
+    readonly mcp_clear_registered_motors: () => [number, number, number, number];
     readonly mcp_component_mass: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly mcp_edit_apply: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly mcp_export_flight_csv: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
     readonly mcp_extract_or_reference: (a: number, b: number, c: number) => [number, number, number, number];
+    readonly mcp_flight_columns: () => [number, number, number, number];
     readonly mcp_inspect: (a: number, b: number) => [number, number, number, number];
     readonly mcp_list_materials: () => [number, number, number, number];
     readonly mcp_list_motors: () => [number, number, number, number];
@@ -104,6 +115,7 @@ export interface InitOutput {
     readonly mcp_new_document: () => [number, number, number, number];
     readonly mcp_optimize: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly mcp_parity: (a: number, b: number, c: number) => [number, number, number, number];
+    readonly mcp_register_motor: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly mcp_sim_warnings: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly mcp_simulate: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly mcp_stability: (a: number, b: number) => [number, number, number, number];

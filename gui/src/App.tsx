@@ -99,6 +99,8 @@ function Workbenchful() {
   // Vertical split between the rocket view and the flight chart (fraction
   // of the centre column given to the top panel). Draggable.
   const [vSplit, setVSplit] = useState(0.5);
+  const [rightWidth, setRightWidth] = useState(280);
+  const rightDragRef = useRef<{ startX: number; startW: number } | null>(null);
   // id of the tree node whose "add child" picker is open (null = none)
   const [addFor, setAddFor] = useState<string | null>(null);
   const [simModalOpen, setSimModalOpen] = useState(false);
@@ -541,7 +543,6 @@ function Workbenchful() {
         sim={sim}
         simNode={simNode}
         busy={busy}
-        fd={fd}
         rocketName={rv?.name ?? "rocket"}
         seriesToggles={seriesToggles}
         onSeriesChange={setSeriesToggles}
@@ -704,7 +705,12 @@ function Workbenchful() {
         </div>
       )}
 
-      <div className="main">
+      <div
+        className="main"
+        style={{
+          gridTemplateColumns: `240px 1fr 1px ${rightWidth}px`,
+        }}
+      >
         <aside className="sidebar">
           <div className="sidebar-head">
             <h2>Components</h2>
@@ -901,6 +907,34 @@ function Workbenchful() {
           </div>
         </div>
 
+        <div
+          className="col-divider"
+          role="separator"
+          aria-orientation="vertical"
+          title="Drag to resize"
+          onPointerDown={(e) => {
+            rightDragRef.current = {
+              startX: e.clientX,
+              startW: rightWidth,
+            };
+            (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+          }}
+          onPointerMove={(e) => {
+            const s = rightDragRef.current;
+            if (!s) return;
+            const next = Math.max(
+              200,
+              Math.min(640, s.startW - (e.clientX - s.startX)),
+            );
+            setRightWidth(next);
+          }}
+          onPointerUp={() => {
+            rightDragRef.current = null;
+          }}
+          onPointerCancel={() => {
+            rightDragRef.current = null;
+          }}
+        />
         <aside className="inspector">
           <h2>Properties</h2>
           <PropertyEditor
