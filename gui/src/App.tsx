@@ -22,6 +22,8 @@ import {
   EditNode,
   MotorInfo,
 } from "./lib/api";
+import { formatFrom, formatQuantity, roundForDisplay } from "./lib/units";
+import { useUnitPref } from "./lib/units-react";
 import { Select } from "./components/ui/Select";
 import { FileMenu } from "./components/ui/FileMenu";
 import {
@@ -37,6 +39,7 @@ import { COMPONENT_ICONS } from "./lib/component-icons";
 import { MotorsPanel } from "./components/MotorsPanel";
 import { AnalysisPanel } from "./components/AnalysisPanel";
 import { SimulationModal } from "./components/SimulationModal";
+import { PreferencesModal } from "./components/PreferencesModal";
 
 // Chrome-free capture route: #raw=<orkPath>|<figure|unfinished|finished>|<angleIdx>
 // Renders ONLY a 1280x720 RocketView3D with OpenRocket's exact camera, for
@@ -80,6 +83,7 @@ export default function App() {
 }
 
 function Workbenchful() {
+  useUnitPref();
   const [wb, setWb] = useState<Workbench | null>(null);
   const [fd, setFd] = useState<FlightData | null>(null);
   const [sim, setSim] = useState<string>("");
@@ -104,6 +108,7 @@ function Workbenchful() {
   // id of the tree node whose "add child" picker is open (null = none)
   const [addFor, setAddFor] = useState<string | null>(null);
   const [simModalOpen, setSimModalOpen] = useState(false);
+  const [prefsOpen, setPrefsOpen] = useState(false);
   const [seriesToggles, setSeriesToggles] = useState<{
     altitude: boolean;
     velocity: boolean;
@@ -550,6 +555,7 @@ function Workbenchful() {
         onRun={simulate}
         onClose={() => setSimModalOpen(false)}
       />
+      <PreferencesModal open={prefsOpen} onClose={() => setPrefsOpen(false)} />
       <header
         ref={headerRef}
         onWheel={onHeaderWheel}
@@ -574,6 +580,7 @@ function Workbenchful() {
           onExportPng={onExportPng}
           onExportObj={onExportObj}
           onExportOrk={onExportOrk}
+          onOpenPreferences={() => setPrefsOpen(true)}
         />
         {rv && (
           <>
@@ -678,29 +685,29 @@ function Workbenchful() {
         <div className="metabar">
           {rv.name}
           {rv.designer ? ` — ${rv.designer}` : ""} ·{" "}
-          {(rv.total_length * 100).toFixed(1)} cm
+          {formatFrom(rv.total_length, "length", "m")}
         </div>
       )}
 
       {stab && (
         <div className="statbar">
           <span>
-            Mass <b>{stab.mass_g.toFixed(1)} g</b>
+            Mass <b>{formatFrom(stab.mass_g, "mass", "g")}</b>
           </span>
           <span>
-            CG <b>{stab.cg_cm.toFixed(2)} cm</b>
+            CG <b>{formatFrom(stab.cg_cm, "length", "cm")}</b>
           </span>
           <span>
-            CP <b>{stab.cp_cm.toFixed(2)} cm</b>
+            CP <b>{formatFrom(stab.cp_cm, "length", "cm")}</b>
           </span>
           <span className={stab.stable ? "good" : "bad"}>
-            Stability <b>{stab.margin_cal.toFixed(2)} cal</b>
+            Stability <b>{roundForDisplay(stab.margin_cal, 2)} cal</b>
           </span>
           <span>
-            Ø <b>{stab.ref_diameter_mm.toFixed(1)} mm</b>
+            Ø <b>{formatFrom(stab.ref_diameter_mm, "length", "mm")}</b>
           </span>
           <span>
-            Cᴅ <b>{stab.cd.toFixed(3)}</b>
+            Cᴅ <b>{roundForDisplay(stab.cd, 3)}</b>
           </span>
         </div>
       )}
@@ -949,16 +956,16 @@ function Workbenchful() {
         {fd ? (
           <>
             <span>
-              Apogee <b>{fd.apogee.toFixed(1)} m</b>
+              Apogee <b>{formatQuantity(fd.apogee, "distance")}</b>
             </span>
             <span>
-              t&#8209;apogee <b>{fd.time_to_apogee.toFixed(2)} s</b>
+              t&#8209;apogee <b>{formatQuantity(fd.time_to_apogee, "time")}</b>
             </span>
             <span>
-              Flight time <b>{fd.flight_time.toFixed(2)} s</b>
+              Flight time <b>{formatQuantity(fd.flight_time, "time")}</b>
             </span>
             <span>
-              Ground hit <b>{fd.ground_hit_velocity.toFixed(2)} m/s</b>
+              Ground hit <b>{formatQuantity(fd.ground_hit_velocity, "velocity")}</b>
             </span>
           </>
         ) : (

@@ -6,7 +6,10 @@ import {
   componentMass,
   listMaterials,
 } from "../lib/api";
+import { formatForField, formatFrom, groupForField } from "../lib/units";
+import { useUnitPref } from "../lib/units-react";
 import { Select } from "./ui/Select";
+import { UnitInput } from "./ui/UnitInput";
 
 // One generic panel renders every component's editable surface from the
 // schema the Rust core emits — OpenRocket's ~40 dialogs collapsed into one.
@@ -33,10 +36,13 @@ function FieldRow({
   materials: Material[];
   onCommit: (value: unknown) => void;
 }) {
-  const [draft, setDraft] = useState<string>(String(f.value ?? ""));
+  const modelStr = formatForField(f);
+  const [draft, setDraft] = useState<string>(modelStr);
   const [dirty, setDirty] = useState(false);
 
-  const modelStr = String(f.value ?? "");
+  // Sync from model when the upstream value changes (e.g. undo, programmatic
+  // patch from another panel). The model string is already rounded so we
+  // won't show IEEE-754 artifacts like 0.09999999998.
   if (!dirty && draft !== modelStr) setDraft(modelStr);
 
   if (f.kind === "bool") {
@@ -130,6 +136,20 @@ function FieldRow({
     f.kind === "angle" ||
     f.kind === "mass" ||
     f.kind === "int";
+
+  // Numeric fields go through UnitInput so each one can be displayed in the
+  // user's preferred unit (mm/cm/in/ft, g/kg/oz/lb, ...) with the wire still
+  // in the base unit Rust expects.
+  if (numeric && groupForField(f)) {
+    return (
+      <label className="prop-row">
+        <span className="prop-label">{f.label}</span>
+        <span className="prop-input">
+          <UnitInput field={f} onCommit={onCommit} />
+        </span>
+      </label>
+    );
+  }
 
   const commit = () => {
     setDirty(false);
@@ -231,6 +251,7 @@ export function PropertyEditor({
   onPatch: (id: string, key: string, value: unknown) => void;
   busy: boolean;
 }) {
+  useUnitPref();
   const [materials, setMaterials] = useState<Material[]>(
     materialsCache ?? [],
   );
@@ -284,7 +305,7 @@ export function PropertyEditor({
         <span className="k">{node.kind}</span>
         {massG !== null && (
           <span className="mass-readout" title="Component mass">
-            {massG < 10 ? massG.toFixed(2) : massG.toFixed(1)} g
+            {formatFrom(massG, "mass", "g")}
           </span>
         )}
       </div>

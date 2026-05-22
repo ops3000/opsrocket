@@ -8,6 +8,8 @@ import {
   clearMotor,
   registerMotor,
 } from "../lib/api";
+import { formatFrom, getUserUnit } from "../lib/units";
+import { useUnitPref } from "../lib/units-react";
 import { Select } from "./ui/Select";
 
 // OpenRocket's "Motors & Configurations" tab: per flight-configuration,
@@ -27,6 +29,10 @@ export function MotorsPanel({
   setErr: (e: string | null) => void;
   busy: boolean;
 }) {
+  useUnitPref();
+  const diaUnit = getUserUnit("length");
+  const massUnit = getUserUnit("mass");
+  const timeUnit = getUserUnit("time");
   const [motors, setMotors] = useState<MotorInfo[]>([]);
   const [filter, setFilter] = useState("");
   const [cfg, setCfg] = useState<string>(
@@ -191,11 +197,11 @@ export function MotorsPanel({
               <th>Cls</th>
               <th>Motor</th>
               <th>Manufacturer</th>
-              <th>Ø mm</th>
-              <th>Impulse</th>
+              <th>Ø {diaUnit}</th>
+              <th>Impulse N·s</th>
               <th>Avg N</th>
-              <th>Burn s</th>
-              <th>Mass g</th>
+              <th>Burn {timeUnit}</th>
+              <th>Mass {massUnit}</th>
               <th>Delays</th>
             </tr>
           </thead>
@@ -215,11 +221,11 @@ export function MotorsPanel({
                     <b>{m.designation}</b>
                   </td>
                   <td>{m.manufacturer.replace(/_/g, " ")}</td>
-                  <td>{m.diameter_mm.toFixed(0)}</td>
+                  <td>{formatFrom(m.diameter_mm, "length", "mm", { withUnit: false })}</td>
                   <td>{m.total_impulse.toFixed(1)}</td>
                   <td>{m.avg_thrust.toFixed(1)}</td>
-                  <td>{m.burn_time.toFixed(2)}</td>
-                  <td>{m.total_mass_g.toFixed(1)}</td>
+                  <td>{formatFrom(m.burn_time, "time", "s", { withUnit: false })}</td>
+                  <td>{formatFrom(m.total_mass_g, "mass", "g", { withUnit: false })}</td>
                   <td>
                     {m.delays
                       .filter((d) => d < 100)

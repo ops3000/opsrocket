@@ -1,5 +1,7 @@
 import { useEffect, useRef } from "react";
 import { RocketView, Mat } from "../lib/api";
+import { formatFrom, formatQuantity, roundForDisplay } from "../lib/units";
+import { useUnitPref } from "../lib/units-react";
 
 // OpenRocket-style 2D side blueprint (RocketFigure SideView). Component
 // outlines stroked in their FigureRenderer class colour; internal
@@ -58,6 +60,7 @@ export function RocketView2D({
   overlay?: Overlay2D | null;
   onRollDelta?: (deltaDeg: number) => void;
 }) {
+  useUnitPref();
   const ref = useRef<HTMLCanvasElement>(null);
   // Latest callback in a ref so the drag listeners can stay attached once
   // (re-attaching them mid-drag, as rollDeg state churns, would break it).
@@ -427,12 +430,12 @@ export function RocketView2D({
       let ty = rulerY + 34;
       const mm =
         overlay.mass_motors_g != null
-          ? `${overlay.mass_motors_g.toFixed(overlay.mass_motors_g < 100 ? 1 : 0)} g`
+          ? formatFrom(overlay.mass_motors_g, "mass", "g")
           : "—";
       for (const s of [
         overlay.name,
-        `Length ${overlay.length_cm.toFixed(1)} cm, max. diameter ${overlay.max_diam_cm.toFixed(1)} cm`,
-        `Mass with no motors ${overlay.mass_g.toFixed(1)} g`,
+        `Length ${formatFrom(overlay.length_cm, "length", "cm")}, max. diameter ${formatFrom(overlay.max_diam_cm, "length", "cm")}`,
+        `Mass with no motors ${formatFrom(overlay.mass_g, "mass", "g")}`,
         `Mass with motors ${mm}`,
       ]) {
         g.fillText(s, tx, ty);
@@ -445,7 +448,7 @@ export function RocketView2D({
       let ry = rulerY + 34;
       g.fillStyle = "rgb(28,40,90)";
       g.fillText(
-        `Stability: ${overlay.margin_cal.toFixed(2)} cal / ${overlay.margin_pct.toFixed(2)} %`,
+        `Stability: ${roundForDisplay(overlay.margin_cal, 2)} cal / ${roundForDisplay(overlay.margin_pct, 2)} %`,
         rx,
         ry,
       );
@@ -481,8 +484,8 @@ export function RocketView2D({
           g.stroke();
         }
       };
-      const cgT = `CG: ${overlay.cg_cm.toFixed(1)} cm`;
-      const cpT = `CP: ${overlay.cp_cm.toFixed(1)} cm`;
+      const cgT = `CG: ${formatFrom(overlay.cg_cm, "length", "cm")}`;
+      const cpT = `CP: ${formatFrom(overlay.cp_cm, "length", "cm")}`;
       g.fillStyle = "rgb(28,40,90)";
       g.fillText(cgT, rx, ry);
       glyph(rx - g.measureText(cgT).width - 12, ry - 5, "cg");
@@ -492,7 +495,7 @@ export function RocketView2D({
       glyph(rx - g.measureText(cpT).width - 12, ry - 5, "cp");
       ry += lineH;
       g.fillStyle = "rgb(140,140,140)";
-      g.fillText(`at M=${overlay.mach.toFixed(3)}`, rx, ry);
+      g.fillText(`at M=${roundForDisplay(overlay.mach, 3)}`, rx, ry);
 
       // Lower-left flight summary (blue), only when a sim has been run.
       g.textAlign = "left";
@@ -506,17 +509,21 @@ export function RocketView2D({
       };
       lab("Flight configuration:", overlay.config_name);
       if (overlay.apogee_m != null)
-        lab("Apogee:", `${overlay.apogee_m.toFixed(0)} m`);
+        lab("Apogee:", formatQuantity(overlay.apogee_m, "distance"));
       if (overlay.max_velocity_ms != null)
         lab(
           "Max. velocity:",
-          `${overlay.max_velocity_ms.toFixed(1)} m/s` +
+          formatQuantity(overlay.max_velocity_ms, "velocity") +
             (overlay.max_velocity_mach != null
-              ? `  (Mach ${overlay.max_velocity_mach.toFixed(3)})`
+              ? `  (Mach ${roundForDisplay(overlay.max_velocity_mach, 3)})`
               : ""),
         );
       if (overlay.max_accel_ms2 != null)
-        lab("Max. acceleration:", `${overlay.max_accel_ms2.toFixed(0)} m/s²`);
+        // No proper "acceleration" unit group yet — keep m/s² literal for now.
+        lab(
+          "Max. acceleration:",
+          `${roundForDisplay(overlay.max_accel_ms2, 0)} m/s²`,
+        );
 
       // CG / CP markers on the centreline at their axial stations.
       glyph(X(overlay.cg_cm / 100), oy, "cg");

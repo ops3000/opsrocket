@@ -21,6 +21,7 @@ export function FileMenu({
   onExportPng,
   onExportObj,
   onExportOrk,
+  onOpenPreferences,
 }: {
   fixtures: Fixture[];
   busy: boolean;
@@ -37,6 +38,7 @@ export function FileMenu({
   onExportPng: () => void;
   onExportObj: () => void;
   onExportOrk: () => void;
+  onOpenPreferences: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [sub, setSub] = useState<"" | "examples" | "export">("");
@@ -226,6 +228,16 @@ export function FileMenu({
               >
                 Export
                 <span className="fm-arrow">▸</span>
+              </button>
+
+              <div className="fm-sep" />
+
+              <button
+                className="fm-item"
+                onMouseEnter={() => setSub("")}
+                onClick={() => act(onOpenPreferences)}
+              >
+                Preferences…
               </button>
             </div>
 

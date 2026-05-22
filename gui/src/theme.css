@@ -560,6 +560,46 @@ input[type="checkbox"]:focus-visible {
   color: var(--muted);
   font-size: 11px;
 }
+/* Per-field unit picker chip (PropertyEditor + SimulationModal). Looks like
+ * a tiny ghost button — only invites a click when the field's quantity has
+ * other units available in its group. */
+.unit-chip {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 6px;
+  cursor: pointer;
+  min-width: 22px;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
+.unit-chip:hover { border-color: var(--line); color: var(--ink); }
+.unit-chip.open { border-color: var(--accent); color: var(--accent-dark); }
+.unit-chip.disabled { opacity: 0.55; cursor: not-allowed; }
+.unit-chip-list {
+  z-index: 1100;
+  font-size: 12px;
+  list-style: none;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 4px;
+  margin: 0;
+  box-shadow: 0 8px 24px rgba(58, 42, 26, 0.16);
+  min-width: 64px;
+}
+.unit-chip-opt {
+  padding: 5px 9px;
+  border-radius: calc(var(--radius) - 6px);
+  cursor: pointer;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.unit-chip-opt:hover { background: var(--bg); }
+.unit-chip-opt.sel { color: var(--accent-dark); font-weight: 600; }
 .sim-slider {
   appearance: none;
   -webkit-appearance: none;
@@ -647,6 +687,21 @@ input[type="checkbox"]:focus-visible {
   border-top: 1px solid var(--line);
   background: rgba(0, 0, 0, 0.02);
 }
+/* Preferences → Units dialog. */
+.pref-modal { width: 480px; }
+.pref-hint { color: var(--muted); margin: 0 0 14px 0; font-size: 12px; }
+.pref-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+.pref-row {
+  display: grid;
+  grid-template-columns: 1fr 140px;
+  align-items: center;
+  gap: 12px;
+}
+.pref-label { color: var(--ink); font-size: 13px; }
 .sim-modal .sim-tabs {
   padding: 8px 18px 0;
   margin-bottom: 0;

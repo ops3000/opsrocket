@@ -7,7 +7,9 @@ import {
   listFlightColumns,
   simWarnings as fetchSimWarnings,
 } from "../lib/api";
+import { formatForField, groupForField } from "../lib/units";
 import { Select } from "./ui/Select";
+import { UnitInput } from "./ui/UnitInput";
 
 // OpenRocket-style "Edit simulation" dialog: launch conditions split into
 // 4 grouped fieldsets (Wind / Launch site / Atmosphere / Launch rod) in a
@@ -63,9 +65,9 @@ function SimRow({
   onCommit: (value: unknown) => void;
   disabled?: boolean;
 }) {
-  const [draft, setDraft] = useState<string>(String(field.value ?? ""));
+  const modelStr = formatForField(field);
+  const [draft, setDraft] = useState<string>(modelStr);
   const [dirty, setDirty] = useState(false);
-  const modelStr = String(field.value ?? "");
   if (!dirty && draft !== modelStr) setDraft(modelStr);
 
   if (field.kind === "bool") {
@@ -104,6 +106,26 @@ function SimRow({
     field.kind === "mass" ||
     field.kind === "int";
   const range = SLIDER_RANGES[field.key];
+
+  // UnitInput handles the conversion + picker for fields whose unit maps to
+  // a known group (length/mass/angle/velocity/temperature/pressure/distance/time).
+  // Lat/long use °N/°E which aren't real angles, so they fall through to the
+  // plain renderer below.
+  if (numeric && groupForField(field)) {
+    return (
+      <div className={"sim-row" + (disabled ? " disabled" : "")}>
+        <span className="sim-label">{field.label}</span>
+        <UnitInput
+          field={field}
+          onCommit={onCommit}
+          disabled={disabled}
+          slider={range}
+          inputClass="sim-input"
+          sliderClass="sim-slider"
+        />
+      </div>
+    );
+  }
 
   const commit = () => {
     setDirty(false);

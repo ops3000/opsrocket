@@ -6,6 +6,8 @@ import {
   getAnalysis,
   runOptimize,
 } from "../lib/api";
+import { formatFrom, formatQuantity, getUserUnit, roundForDisplay } from "../lib/units";
+import { useUnitPref } from "../lib/units-react";
 import { Select } from "./ui/Select";
 
 // OpenRocket's "Component Analysis" tab + a focused 1-D design optimizer.
@@ -21,6 +23,9 @@ export function AnalysisPanel({
   sim: string;
   setErr: (e: string | null) => void;
 }) {
+  useUnitPref();
+  const lenUnit = getUserUnit("length");
+  const distUnit = getUserUnit("distance");
   const [an, setAn] = useState<Analysis | null>(null);
   const [mach, setMach] = useState("0.3");
 
@@ -94,7 +99,7 @@ export function AnalysisPanel({
               <tr>
                 <th>Component</th>
                 <th>CNα</th>
-                <th>CP cm</th>
+                <th>CP {lenUnit}</th>
                 <th>CD fric</th>
                 <th>CD press</th>
                 <th>CD share</th>
@@ -107,19 +112,19 @@ export function AnalysisPanel({
                     <b>{r.name}</b>{" "}
                     <span className="k">{r.kind}</span>
                   </td>
-                  <td>{r.cn_alpha.toFixed(3)}</td>
-                  <td>{r.cp_cm.toFixed(2)}</td>
-                  <td>{r.cd_friction.toFixed(4)}</td>
-                  <td>{r.cd_pressure.toFixed(4)}</td>
-                  <td>{(r.cd_share * 100).toFixed(1)}%</td>
+                  <td>{roundForDisplay(r.cn_alpha, 3)}</td>
+                  <td>{formatFrom(r.cp_cm, "length", "cm", { withUnit: false })}</td>
+                  <td>{roundForDisplay(r.cd_friction, 4)}</td>
+                  <td>{roundForDisplay(r.cd_pressure, 4)}</td>
+                  <td>{roundForDisplay(r.cd_share * 100, 1)}%</td>
                 </tr>
               ))}
               <tr className="tot">
-                <td>Total (+ base {an.cd_base.toFixed(3)})</td>
-                <td>{an.cn_alpha_total.toFixed(3)}</td>
-                <td>{an.cp_cm.toFixed(2)}</td>
+                <td>Total (+ base {roundForDisplay(an.cd_base, 3)})</td>
+                <td>{roundForDisplay(an.cn_alpha_total, 3)}</td>
+                <td>{formatFrom(an.cp_cm, "length", "cm", { withUnit: false })}</td>
                 <td colSpan={2}></td>
-                <td>CD {an.cd_total.toFixed(4)}</td>
+                <td>CD {roundForDisplay(an.cd_total, 4)}</td>
               </tr>
             </tbody>
           </table>
@@ -224,15 +229,15 @@ export function AnalysisPanel({
         {opt && (
           <div className="opt-res">
             <p>
-              Baseline <b>{opt.baseline_value.toFixed(2)}</b> ·{" "}
+              Baseline <b>{roundForDisplay(opt.baseline_value, 2)}</b> ·{" "}
               {opt.best_value != null ? (
                 <>
                   Best{" "}
                   <b className="hit">
-                    {opt.best_value.toFixed(2)}
+                    {roundForDisplay(opt.best_value, 2)}
                   </b>{" "}
                   → apogee{" "}
-                  <b>{opt.best_apogee?.toFixed(1)} m</b>
+                  <b>{opt.best_apogee != null ? formatQuantity(opt.best_apogee, "distance") : "—"}</b>
                 </>
               ) : (
                 <span className="bad">
@@ -244,7 +249,7 @@ export function AnalysisPanel({
               <thead>
                 <tr>
                   <th>Value</th>
-                  <th>Apogee m</th>
+                  <th>Apogee {distUnit}</th>
                   <th>Stability cal</th>
                   <th></th>
                 </tr>
@@ -257,9 +262,9 @@ export function AnalysisPanel({
                       p.value === opt.best_value ? "sel" : ""
                     }
                   >
-                    <td>{p.value.toFixed(2)}</td>
-                    <td>{p.apogee.toFixed(1)}</td>
-                    <td>{p.margin_cal.toFixed(2)}</td>
+                    <td>{roundForDisplay(p.value, 2)}</td>
+                    <td>{formatFrom(p.apogee, "distance", "m", { withUnit: false })}</td>
+                    <td>{roundForDisplay(p.margin_cal, 2)}</td>
                     <td>
                       {p.feasible ? (
                         ""

@@ -1,7 +1,13 @@
 import { FlightData } from "../lib/api";
+import { formatQuantity, getUserUnit } from "../lib/units";
+import { useUnitPref } from "../lib/units-react";
 
 // Lightweight dual-axis SVG line chart: altitude (pink) + velocity (ink).
 export function FlightChart({ fd }: { fd: FlightData }) {
+  useUnitPref();
+  const altUnit = getUserUnit("distance");
+  const velUnit = getUserUnit("velocity");
+  const timeUnit = getUserUnit("time");
   const W = 900;
   const H = 250;
   const padL = 50;
@@ -62,13 +68,13 @@ export function FlightChart({ fd }: { fd: FlightData }) {
           </g>
         ))}
       <text x={padL} y={14} fontSize={11} fill="#ec4899">
-        altitude (m), max {aMax.toFixed(1)}
+        altitude ({altUnit}), max {formatQuantity(aMax, "distance")}
       </text>
-      <text x={W - padR - 120} y={14} fontSize={11} fill="#3a2a1a">
-        velocity (m/s), max {vMax.toFixed(1)}
+      <text x={W - padR - 140} y={14} fontSize={11} fill="#3a2a1a">
+        velocity ({velUnit}), max {formatQuantity(vMax, "velocity")}
       </text>
       <text x={W / 2} y={H - 6} fontSize={10} fill="#9a7b56" textAnchor="middle">
-        time (s) — {tMax.toFixed(1)} s
+        time ({timeUnit}) — {formatQuantity(tMax, "time")}
       </text>
     </svg>
   );
