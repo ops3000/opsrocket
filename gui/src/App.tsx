@@ -814,7 +814,15 @@ function Workbenchful() {
             gridTemplateRows: `${vSplit}fr 3px ${1 - vSplit}fr`,
           }}
         >
-          <div className="panel">
+          <div
+            className={
+              "panel" +
+              // Lock the design viewport (and its empty state) to the light
+              // palette so the cream paper of RocketView2D's canvas extends
+              // edge-to-edge in dark mode too. Motors / Sim / Analysis tabs
+              // are normal editing surfaces and follow the theme.
+              (!wb || tab === "design" ? " flight-panel" : "")
+            }>
             {!(
               tab === "design" &&
               (viewSel === "side" ||
