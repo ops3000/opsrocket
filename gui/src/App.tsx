@@ -40,6 +40,7 @@ import { MotorsPanel } from "./components/MotorsPanel";
 import { AnalysisPanel } from "./components/AnalysisPanel";
 import { SimulationModal } from "./components/SimulationModal";
 import { PreferencesModal } from "./components/PreferencesModal";
+import { ThemeToggle } from "./components/ThemeToggle";
 
 // Chrome-free capture route: #raw=<orkPath>|<figure|unfinished|finished>|<angleIdx>
 // Renders ONLY a 1280x720 RocketView3D with OpenRocket's exact camera, for
@@ -556,6 +557,7 @@ function Workbenchful() {
         onClose={() => setSimModalOpen(false)}
       />
       <PreferencesModal open={prefsOpen} onClose={() => setPrefsOpen(false)} />
+      <ThemeToggle />
       <header
         ref={headerRef}
         onWheel={onHeaderWheel}

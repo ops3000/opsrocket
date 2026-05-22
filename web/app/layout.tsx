@@ -19,6 +19,27 @@ export const metadata: Metadata = {
   icons: { icon: "/favicon.ico" },
 };
 
+// Inline pre-paint script: reads the saved theme from localStorage and
+// applies the data-theme attribute on <html> before the first CSS evaluation
+// so there's no light-to-dark flicker. Source of truth is the workbench's
+// bottom-right toggle (gui/src/lib/theme.ts); same-origin iframes share
+// this localStorage key.
+const themeBoot = `
+(function(){
+  try {
+    var t = localStorage.getItem('opsrocket_theme');
+    if (t === 'light' || t === 'dark') {
+      document.documentElement.setAttribute('data-theme', t);
+    }
+    addEventListener('storage', function(e){
+      if (e.key === 'opsrocket_theme' && (e.newValue === 'light' || e.newValue === 'dark')) {
+        document.documentElement.setAttribute('data-theme', e.newValue);
+      }
+    });
+  } catch (_) {}
+})();
+`;
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -29,6 +50,9 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeBoot }} />
+      </head>
       <body className="min-h-full flex flex-col">{children}</body>
     </html>
   );

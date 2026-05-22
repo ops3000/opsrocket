@@ -466,11 +466,11 @@ export function ChatPill({
             style={{
               background: "var(--bg-2)",
               border: willDismiss
-                ? "1px solid rgba(232,237,247,0.55)"
-                : "1px solid rgba(232,237,247,0.18)",
+                ? "1px solid var(--chat-pill-border-active)"
+                : "1px solid var(--chat-pill-border)",
               boxShadow: willDismiss
-                ? "0 0 0 4px rgba(232,237,247,0.14), 0 24px 56px rgba(0,0,0,0.45)"
-                : "0 0 0 3px rgba(255,45,120,0.06), 0 18px 48px rgba(255,45,120,0.12)",
+                ? "var(--chat-pill-shadow-active)"
+                : "var(--chat-pill-shadow)",
               top: -(panelHeight + 5),
               bottom: -5,
               left: -5,
@@ -488,7 +488,7 @@ export function ChatPill({
               aria-hidden="true"
               className="pointer-events-none absolute inset-0 flex items-center justify-center"
               style={{
-                background: "rgba(10,14,26,0.55)",
+                background: "var(--chat-dismiss-overlay)",
                 backdropFilter: "blur(8px)",
                 WebkitBackdropFilter: "blur(8px)",
                 opacity: willDismiss ? 1 : 0,
@@ -595,10 +595,8 @@ export function ChatPill({
             background: "var(--bg-2)",
             border: focused
               ? "1px solid var(--accent)"
-              : "1px solid rgba(232,237,247,0.18)",
-            boxShadow: focused
-              ? "0 0 0 3px rgba(255,45,120,0.08), 0 8px 28px rgba(255,45,120,0.16)"
-              : "none",
+              : "1px solid var(--chat-input-border)",
+            boxShadow: focused ? "var(--chat-input-shadow)" : "none",
             transition: "border-color 180ms ease, box-shadow 180ms ease",
           }}
         >

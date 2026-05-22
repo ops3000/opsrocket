@@ -3,6 +3,9 @@
   --accent-dark: #be2768;
   --bg: #fef3c7;
   --panel: #fffdf5;
+  --paper: #fffaf0;
+  --surface: #ffffff;
+  --hover: rgba(0, 0, 0, 0.04);
   --ink: #3a2a1a;
   --muted: #9a7b56;
   --line: #e7d8b0;
@@ -10,6 +13,27 @@
   --radius: 18px;
   --focus: rgba(236, 72, 153, 0.35);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  color-scheme: light;
+}
+
+/* Dark workspace (matches the chat's deep-navy palette so the chat overlay
+ * and the workbench underneath read as one continuous surface). The
+ * data-theme attribute is set by the toggle in App.tsx and synced via
+ * localStorage so /workspace's parent page applies the same theme to its
+ * chat overlay. */
+:root[data-theme="dark"] {
+  --accent: #ff2d78;
+  --accent-dark: #ff5c97;
+  --bg: #05070d;
+  --panel: #0e1424;
+  --paper: #0a0e1a;
+  --surface: #131a2e;
+  --hover: rgba(255, 255, 255, 0.05);
+  --ink: #e8edf7;
+  --muted: #8a98b8;
+  --line: #1c2740;
+  --focus: rgba(255, 45, 120, 0.35);
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -175,7 +199,7 @@ select {
   appearance: none;
   -webkit-appearance: none;
   -moz-appearance: none;
-  background: #fff;
+  background: var(--surface);
   color: var(--ink);
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -263,7 +287,7 @@ input[type="checkbox"] {
   height: 16px;
   border: 1px solid var(--line);
   border-radius: 5px;
-  background: #fff;
+  background: var(--surface);
   cursor: pointer;
   position: relative;
   transition:
@@ -327,7 +351,7 @@ input[type="checkbox"]:focus-visible {
   width: 100%;
   border-collapse: collapse;
   font-size: 12px;
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 6px;
 }
@@ -445,7 +469,7 @@ input[type="checkbox"]:focus-visible {
   max-height: calc(100vh - 80px);
   display: flex;
   flex-direction: column;
-  background: #fffaf0;
+  background: var(--paper);
   border-radius: 14px;
   box-shadow: 0 24px 56px rgba(0, 0, 0, 0.25);
   overflow: hidden;
@@ -470,7 +494,7 @@ input[type="checkbox"]:focus-visible {
 .sim-head-value { font-size: 12px; color: var(--ink); }
 .sim-name-input {
   border: 1px solid var(--line);
-  background: #fff;
+  background: var(--surface);
   border-radius: var(--radius);
   padding: 4px 10px;
   font-size: 13px;
@@ -504,7 +528,7 @@ input[type="checkbox"]:focus-visible {
   position: absolute;
   top: -8px;
   left: 12px;
-  background: #fffaf0;
+  background: var(--paper);
   padding: 0 8px;
   font-size: 10px;
   font-weight: 700;
@@ -548,7 +572,7 @@ input[type="checkbox"]:focus-visible {
 }
 .sim-row .sim-input {
   border: 1px solid var(--line);
-  background: #fff;
+  background: var(--surface);
   border-radius: var(--radius);
   padding: 4px 8px;
   font-size: 12px;
@@ -583,7 +607,7 @@ input[type="checkbox"]:focus-visible {
   z-index: 1100;
   font-size: 12px;
   list-style: none;
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 4px;
@@ -702,6 +726,42 @@ input[type="checkbox"]:focus-visible {
   gap: 12px;
 }
 .pref-label { color: var(--ink); font-size: 13px; }
+
+/* Floating light/dark toggle, bottom-right of the workbench. Persists to
+ * localStorage; the chat overlay (same origin) syncs via `storage` event. */
+.theme-toggle {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 50;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    border-color 0.15s,
+    transform 0.12s;
+}
+.theme-toggle:hover {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+.theme-toggle:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--focus);
+}
 .sim-modal .sim-tabs {
   padding: 8px 18px 0;
   margin-bottom: 0;
@@ -805,7 +865,7 @@ input[type="checkbox"]:focus-visible {
 .prop-row select {
   width: 110px;
   border: 1px solid var(--line);
-  background: #fff;
+  background: var(--surface);
   border-radius: var(--radius);
   padding: 5px 10px;
   font-size: 12px;
@@ -862,7 +922,7 @@ button.link:hover { background: none; color: var(--accent); }
   font-size: 13px;
   margin-bottom: 8px;
 }
-.motor-table { flex: 1; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+.motor-table { flex: 1; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
 .motor-table table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .motor-table th {
   position: sticky;
@@ -1000,7 +1060,7 @@ button.link:hover { background: none; color: var(--accent); }
   min-width: 210px;
   max-height: 70vh;
   overflow-y: auto;
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 5px;
@@ -1138,7 +1198,7 @@ footer b { color: var(--accent); }
   align-items: center;
   gap: 8px;
   width: 100%;
-  background: #fff;
+  background: var(--surface);
   color: var(--ink);
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -1150,7 +1210,7 @@ footer b { color: var(--accent); }
     border-color 0.15s,
     box-shadow 0.15s;
 }
-.uisel-trigger:hover { background: #fff; }
+.uisel-trigger:hover { background: var(--surface); }
 .uisel.disabled .uisel-trigger {
   background: var(--bg);
   color: var(--muted);
@@ -1186,7 +1246,7 @@ footer b { color: var(--accent); }
   max-height: 280px;
   overflow-y: auto;
   list-style: none;
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 5px;

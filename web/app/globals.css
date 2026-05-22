@@ -10,6 +10,47 @@
   --accent: #ff2d78; /* OpsRocket magenta */
   --accent-2: #29e6d4; /* telemetry cyan */
   --good: #38e08a;
+  /* Chat pill chrome — themed so the homepage pill keeps the right
+   * border / shadow / dismiss-overlay in both palettes. */
+  --chat-pill-border: rgba(232, 237, 247, 0.18);
+  --chat-pill-border-active: rgba(232, 237, 247, 0.55);
+  --chat-pill-shadow: 0 0 0 3px rgba(255, 45, 120, 0.06),
+    0 18px 48px rgba(255, 45, 120, 0.12);
+  --chat-pill-shadow-active: 0 0 0 4px rgba(232, 237, 247, 0.14),
+    0 24px 56px rgba(0, 0, 0, 0.45);
+  --chat-dismiss-overlay: rgba(10, 14, 26, 0.55);
+  --chat-input-border: rgba(232, 237, 247, 0.18);
+  --chat-input-shadow: 0 0 0 3px rgba(255, 45, 120, 0.08),
+    0 8px 28px rgba(255, 45, 120, 0.16);
+  color-scheme: dark;
+}
+
+/* Light variant — same magenta accent, but the rest of the surface flips to
+ * the workbench's cream-paper palette so the homepage chat reads as one
+ * surface with the workspace below it. Toggled by the workbench's bottom-
+ * right button via localStorage["opsrocket_theme"]; same-origin iframes
+ * receive the change via the `storage` event. */
+:root[data-theme="light"] {
+  --bg: #fef3c7;
+  --bg-2: #fffaf0;
+  --panel: #fffdf5;
+  --line: #e7d8b0;
+  --ink: #3a2a1a;
+  --muted: #9a7b56;
+  --accent: #ec4899;
+  --accent-2: #0ea5b7;
+  --good: #1f9d55;
+  --chat-pill-border: rgba(58, 42, 26, 0.15);
+  --chat-pill-border-active: rgba(58, 42, 26, 0.45);
+  --chat-pill-shadow: 0 0 0 3px rgba(236, 72, 153, 0.08),
+    0 18px 48px rgba(236, 72, 153, 0.14);
+  --chat-pill-shadow-active: 0 0 0 4px rgba(58, 42, 26, 0.10),
+    0 24px 56px rgba(58, 42, 26, 0.20);
+  --chat-dismiss-overlay: rgba(254, 250, 240, 0.55);
+  --chat-input-border: rgba(58, 42, 26, 0.15);
+  --chat-input-shadow: 0 0 0 3px rgba(236, 72, 153, 0.08),
+    0 8px 28px rgba(236, 72, 153, 0.16);
+  color-scheme: light;
 }
 
 @theme inline {
