@@ -71,6 +71,14 @@ export async function getUser(
 /**
  * PUT /user/starred/{owner}/{repo} — idempotent; 204 whether or not the
  * user already starred. Returns true on success.
+ *
+ * 403 = the token lacks the "Starring: write" permission. Check the
+ *   GitHub App config (Settings → Developer settings → GitHub Apps →
+ *   <app> → Permissions → User permissions → Starring: Read and write)
+ *   AND the Vercel env vars (GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET
+ *   must be the GitHub App's, not the old classic OAuth app's).
+ * 404 = repo not found / private — verify STAR_REPO env.
+ * 401 = bad/expired token.
  */
 export async function starRepo(
   token: string,
@@ -86,5 +94,23 @@ export async function starRepo(
       "User-Agent": UA,
     },
   });
+  if (r.status !== 204) {
+    // Drain the body so we can surface GitHub's diagnostic message in
+    // Vercel function logs. Don't throw — sign-in should still succeed
+    // even if starring fails.
+    let body = "";
+    try {
+      body = (await r.text()).slice(0, 400);
+    } catch {
+      /* ignore */
+    }
+    const scopes = r.headers.get("x-oauth-scopes") ?? "(none)";
+    const acceptedScopes =
+      r.headers.get("x-accepted-oauth-scopes") ?? "(none)";
+    console.warn(
+      `[starRepo] ${ownerRepo} → ${r.status} ${r.statusText} · ` +
+        `x-oauth-scopes=${scopes} · accepted=${acceptedScopes} · body=${body}`,
+    );
+  }
   return r.status === 204;
 }
