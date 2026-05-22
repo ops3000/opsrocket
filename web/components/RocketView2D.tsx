@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import type { RocketView, Mat } from "./rv-types";
+import type { RocketView } from "./rv-types";
 
 // OpenRocket-style 2D side blueprint (RocketFigure SideView) — the exact
 // drawing from the workbench, minus the info overlay. Drag vertically to
@@ -10,18 +10,20 @@ import type { RocketView, Mat } from "./rv-types";
 const BORDER_W = 26;
 const BORDER_H = 16;
 
-function col(m: Mat): string {
-  const [r, g, b] = m.figure_color;
-  return `rgb(${r},${g},${b})`;
-}
-function styleFor(kind: string, m: Mat) {
+// The .ork-emitted figure_color is a deep blue that fights with the
+// blueprint grid behind the hero. Ignore it; paint every body / fin /
+// lug stroke in `accentLine` (resolved from --accent2 at draw time) so
+// the silhouette reads as on-brand instead of stock-OpenRocket blue.
+// Internal recovery/mass dashed, motor mount magenta, motor grey — same
+// as before.
+function styleFor(kind: string, accentLine: string) {
   if (kind === "Motor")
     return { stroke: "rgb(150,150,150)", fill: "rgb(110,110,120)", dash: "" };
   if (kind === "Parachute" || kind === "ShockCord" || kind === "MassObject")
-    return { stroke: col(m), fill: "none", dash: "6 4" };
+    return { stroke: accentLine, fill: "none", dash: "6 4" };
   if (kind === "InnerTube" || kind === "CenteringRing")
     return { stroke: "rgb(214,76,160)", fill: "none", dash: "" };
-  return { stroke: col(m), fill: "none", dash: "" };
+  return { stroke: accentLine, fill: "none", dash: "" };
 }
 
 export function RocketView2D({
@@ -83,6 +85,13 @@ export function RocketView2D({
     const g = cv.getContext("2d")!;
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, W, H);
+
+    // Resolve the brand cyan once per paint — the canvas 2D ctx can't
+    // consume CSS vars directly. Falls back to a hard cyan if for some
+    // reason the property isn't set (e.g. component rendered detached).
+    const css = getComputedStyle(document.documentElement);
+    const accentLine =
+      css.getPropertyValue("--accent-2").trim() || "rgb(41,230,212)";
 
     let minX = Infinity,
       maxX = -Infinity,
@@ -163,7 +172,7 @@ export function RocketView2D({
     for (const p of rv.lathe) {
       if (p.outer.length < 2) continue;
       const rad = projY(p.radial, p.radial_angle);
-      const st = styleFor(p.kind, p.mat);
+      const st = styleFor(p.kind, accentLine);
       if (
         p.kind === "Parachute" ||
         p.kind === "ShockCord" ||
@@ -269,7 +278,7 @@ export function RocketView2D({
           [f.sweep, f.height],
         ];
       }
-      const st = { stroke: col(f.mat), fill: "none", dash: "" };
+      const st = { stroke: accentLine, fill: "none", dash: "" };
       const n = Math.max(f.count, 1);
       for (let i = 0; i < n; i++) {
         const phi =
@@ -288,7 +297,7 @@ export function RocketView2D({
 
     for (const l of rv.lugs) {
       const b = projY(l.radial, l.radial_angle) + l.body_radius;
-      const st = { stroke: col(l.mat), fill: "none", dash: "" };
+      const st = { stroke: accentLine, fill: "none", dash: "" };
       poly(
         [
           [X(l.axial_start), Y(b)],

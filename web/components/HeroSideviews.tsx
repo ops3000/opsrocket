@@ -59,7 +59,7 @@ function Plate({
   };
   return (
     <div
-      className="glass-card px-5 py-4"
+      className="card px-5 py-4"
       onMouseEnter={hold}
       onMouseLeave={release}
       onPointerDown={hold}
@@ -132,7 +132,7 @@ export function HeroSideviews() {
         items[i] ? (
           <Plate key={f.ork} rv={items[i]!} name={f.name} spec={f.spec} />
         ) : (
-          <div key={f.ork} className="glass-card px-5 py-4">
+          <div key={f.ork} className="card px-5 py-4">
             <div className="mono mb-1 text-[10px] uppercase tracking-wider text-[var(--accent2)]">
               {f.name}
             </div>
