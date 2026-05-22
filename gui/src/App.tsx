@@ -906,7 +906,7 @@ function Workbenchful() {
             onPointerUp={onVSplitUp}
             title="Drag to resize"
           />
-          <div className="panel" style={{ borderBottom: "none" }}>
+          <div className="panel flight-panel" style={{ borderBottom: "none" }}>
             <span className="tag">Flight</span>
             {fd ? (
               <FlightChart fd={fd} />

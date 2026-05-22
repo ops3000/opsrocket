@@ -1160,6 +1160,26 @@ button.link:hover { background: none; color: var(--accent); }
   z-index: 2;
 }
 
+/* The Flight chart is intentionally locked to the light palette in both
+ * modes — the line colours (magenta + ink, on cream paper with cream
+ * axes) read clearly on white but disappear on the dark background, and
+ * scientific plots are conventionally light. Re-declaring the vars on the
+ * container scopes them to this subtree only. */
+.flight-panel {
+  --bg: #fef3c7;
+  --panel: #fffdf5;
+  --paper: #fffaf0;
+  --surface: #ffffff;
+  --ink: #3a2a1a;
+  --muted: #9a7b56;
+  --line: #e7d8b0;
+  --accent: #ec4899;
+  --accent-dark: #be2768;
+  background: var(--paper);
+  color: var(--ink);
+  color-scheme: light;
+}
+
 footer {
   background: var(--panel);
   border-top: 1px solid var(--line);
