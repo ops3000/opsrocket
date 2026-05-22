@@ -464,38 +464,17 @@ export function RocketView2D({
         g.quadraticCurveTo(x, y, x + r, y);
         g.closePath();
       };
-      // Frosted-glass: clip to the rounded rect, draw the canvas back into
-      // itself with a heavy blur filter (true backdrop blur — the rocket
-      // schematic underneath becomes a soft wash), then tint with a low-
-      // alpha cream so the original line colours still suggest themselves
-      // without competing with the text.
       const glassCard = (x: number, y: number, w: number, h: number) => {
-        // 1. Backdrop blur — sample what's already on the canvas, paint
-        //    it back over the same region through a blur filter.
         g.save();
-        roundRect(x, y, w, h);
-        g.clip();
-        g.filter = "blur(12px)";
-        g.drawImage(cv, 0, 0);
-        g.filter = "none";
-        g.restore();
-
-        // 2. Translucent cream tint + soft drop shadow.
-        g.save();
-        g.shadowColor = "rgba(58, 42, 26, 0.10)";
-        g.shadowBlur = 18;
-        g.shadowOffsetY = 4;
-        g.fillStyle = "rgba(255, 250, 240, 0.55)";
+        g.shadowColor = "rgba(58, 42, 26, 0.08)";
+        g.shadowBlur = 16;
+        g.shadowOffsetY = 3;
+        g.fillStyle = "rgba(255, 250, 240, 0.78)";
         roundRect(x, y, w, h);
         g.fill();
         g.restore();
-
-        // 3. Inner highlight (top edge) + soft cream border.
-        g.strokeStyle = "rgba(255, 255, 255, 0.7)";
+        g.strokeStyle = "rgba(231, 216, 176, 0.65)";
         g.lineWidth = 1;
-        roundRect(x + 0.5, y + 0.5, w - 1, h - 1);
-        g.stroke();
-        g.strokeStyle = "rgba(231, 216, 176, 0.55)";
         roundRect(x, y, w, h);
         g.stroke();
       };
