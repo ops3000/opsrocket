@@ -1,0 +1,67 @@
+---
+slug: recovery
+title: Recovery
+description: Parachute area sizing, drogue + main staging, and why your rocket survives the trip back.
+chapter: 8
+tags: [recovery, parachute, drogue, descent]
+---
+
+A rocket that flies once is a rocket. A rocket that flies twice is a system. Recovery is what keeps you in the second category.
+
+## Terminal velocity, fast
+
+A rocket at apogee has zero vertical velocity and a lot of altitude to convert back into kinetic energy. Without a parachute, it'll hit the ground at terminal velocity — for a typical 200 g model rocket, that's somewhere around 30–60 m/s. That's fast enough to destroy the rocket and dangerous enough to mandate a recovery system at any organized launch.
+
+A deployed parachute slows the rocket by trading altitude for drag. Terminal velocity with a parachute is set by the balance of weight and drag:
+
+$$
+mg = \tfrac{1}{2}\, \rho\, v^2\, C_d\, A
+$$
+
+Solving for descent velocity:
+
+<Eq label="(8.1)">
+$$
+v_\text{descent} = \sqrt{\frac{2 m g}{\rho\, C_d\, A}}
+$$
+</Eq>
+
+Where:
+- $m$ is rocket mass (kg)
+- $g$ is $9.81$ m/s²
+- $\rho$ is air density (kg/m³, about 1.225 at sea level)
+- $C_d$ is parachute drag coefficient (~0.75 for a flat circular sheet, ~1.5 for a hemispherical paragear)
+- $A$ is parachute area (m²)
+
+For a 500 g rocket descending at 5 m/s with a flat parachute ($C_d \approx 0.75$):
+
+$$
+A = \frac{2 \cdot 0.5 \cdot 9.81}{1.225 \cdot 0.75 \cdot 5^2} \approx 0.43 \text{ m}^2
+$$
+
+That's a circle of diameter ~74 cm. Reasonable.
+
+## Drogue + main
+
+Big rockets at high altitude have a problem: a parachute large enough to land softly at sea level is so big at apogee that even mild winds drag the rocket horizontally for kilometers before touchdown. You wake up at the end of the day driving deep into the desert looking for your $1500 build.
+
+The fix is **dual deployment**:
+
+1. **Drogue** at apogee. Small parachute (sometimes just a streamer). Descent rate ~20 m/s — fast enough to fall close to the launch pad.
+2. **Main** at low altitude (~150–300 m AGL). Big parachute. Slows the rocket to a survivable landing speed for the last hundred meters.
+
+The transition is triggered by an altimeter that watches absolute pressure during descent. OpsRocket simulates this; OpenRocket got it right; reality occasionally does not (every flier has lost a rocket because the altimeter fired the main charge at apogee, dragged the chute through the air at terminal velocity, and shredded it).
+
+## Recovery as a design constraint
+
+A rocket isn't done when the engine cuts out. The recovery system is part of the design from the start:
+
+- **Mass budget**: parachute + ejection charge + protection wadding + nomex chute protector = often 10–20% of dry mass.
+- **Volume**: the recovery section needs enough body tube length to stow the chute folded. Too small and the chute won't deploy cleanly.
+- **Ejection event**: solid motors have a built-in time-delay ejection charge (the "−3" or "−5" suffix on motor designations). The delay must be tuned to fire **at apogee**, not before (chute deploys at high speed, shreds) and not after (rocket already fell past apogee, lawn-dart).
+
+<OpenInWorkbench example="Dual_parachute_deployment" label="See drogue + main deployment timed correctly" />
+
+That's the end of the intro. Eight chapters in, you've seen what makes a rocket fly, how thrust is generated, how to compare engines, how the mass ratio shapes everything, what the nozzle does, how to keep the rocket pointed up, when to stage, and how to bring it home. The workbench has everything you need to start building — pick an example, swap motors, watch the numbers move, then design your own.
+
+> Where to go from here: Sutton & Biblarz's *Rocket Propulsion Elements* for the rigorous treatment; the [OpenRocket wiki](https://openrocket.info) for hobby-specific tutorials; the [Tripoli](https://tripoli.org) and [NAR](https://nar.org) certification guides if you want to fly anything bigger than an Estes.

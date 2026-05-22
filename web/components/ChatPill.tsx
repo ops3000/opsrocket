@@ -149,6 +149,13 @@ export function ChatPill({
   const [dragY, setDragY] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [panelHeight, setPanelHeight] = useState(350);
+  // If the user clicked "Discuss this in chat" from a /learn chapter, the
+  // chapter slug + title were stashed in localStorage. We read them once
+  // on mount and inject a hidden leading message on the next /api/chat
+  // call so the copilot has the chapter as context.
+  const [chapterSeed, setChapterSeed] = useState<
+    { slug: string; title: string } | null
+  >(null);
   const { state: workbenchState, loadDesign, requestSimulate } = useWorkbench();
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -250,6 +257,23 @@ export function ChatPill({
     };
   }, []);
 
+  // One-shot pickup of a /learn chapter seed (set by DiscussInChat). We
+  // consume + clear it immediately so a refresh doesn't re-inject the same
+  // context forever.
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem("opsrocket_chat_seed");
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as { slug?: string; title?: string };
+      window.localStorage.removeItem("opsrocket_chat_seed");
+      if (parsed.slug && parsed.title) {
+        setChapterSeed({ slug: parsed.slug, title: parsed.title });
+      }
+    } catch {
+      // ignore malformed payload
+    }
+  }, []);
+
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -289,6 +313,20 @@ export function ChatPill({
     if (!v) return;
 
     const history = [
+      // If the user just came from a /learn chapter, prepend a hidden
+      // context message so the model knows what they were reading. This
+      // is sent only on the first turn after seed pickup, then unset.
+      ...(chapterSeed
+        ? [
+            {
+              role: "user" as const,
+              content:
+                `(Context from /learn: I just finished reading the chapter "${chapterSeed.title}". ` +
+                `If it's relevant, load the \`learn-${chapterSeed.slug}\` skill for accurate details. ` +
+                `Don't acknowledge this preface; just answer my next question with that grounding in mind.)`,
+            },
+          ]
+        : []),
       ...messages.map((m) => ({
         role: m.role,
         content:
@@ -303,6 +341,8 @@ export function ChatPill({
       })),
       { role: "user" as const, content: v },
     ];
+    // Consume the seed so the next turn doesn't re-inject it.
+    if (chapterSeed) setChapterSeed(null);
 
     setDismissed(false);
     // Sending a new turn = user wants to see the response, so re-anchor

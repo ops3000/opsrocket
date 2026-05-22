@@ -10,8 +10,16 @@ const nextConfig: NextConfig = {
   // globs against the route path; brackets in dynamic segments are
   // escaped per the Next.js docs (node_modules/next/dist/docs/.../output.md).
   outputFileTracingIncludes: {
-    "/\\[transport\\]": ["./lib/opswasm-web/**", "./skills/**"],
-    "/api/chat": ["./lib/opswasm-web/**", "./skills/**"],
+    "/\\[transport\\]": [
+      "./lib/opswasm-web/**",
+      "./skills/**",
+      "./content/learn/**",
+    ],
+    "/api/chat": [
+      "./lib/opswasm-web/**",
+      "./skills/**",
+      "./content/learn/**",
+    ],
   },
   async headers() {
     return [

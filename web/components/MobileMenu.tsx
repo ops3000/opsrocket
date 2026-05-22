@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 // Workbench" CTA on small screens. Desktop keeps the original layout.
 
 const ITEMS: [label: string, href: string][] = [
+  ["LEARN", "/learn"],
   ["PARITY", "/parity"],
   ["VALIDATION", "/validation"],
   ["RENDER", "/render"],

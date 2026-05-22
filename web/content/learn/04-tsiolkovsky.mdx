@@ -1,0 +1,39 @@
+---
+slug: tsiolkovsky
+title: The Tsiolkovsky rocket equation
+description: Δv = v_e · ln(m₀/m_f) — the equation that makes orbital flight hard.
+chapter: 4
+tags: [rocket-equation, delta-v, mass-fraction]
+---
+
+Konstantin Tsiolkovsky wrote it down in 1903, before anyone had built a serious rocket. It's still the single most important equation in space flight:
+
+<Eq label="(4.1)">
+$$
+\Delta v = v_e \, \ln\!\frac{m_0}{m_f}
+$$
+</Eq>
+
+The total velocity change a rocket can deliver equals its exhaust velocity times the natural log of the mass ratio (start-mass over end-mass). That's all. No propellant left, you're done.
+
+The logarithm is the cruel part. To double your $\Delta v$, you don't double your propellant — you have to *square* your mass ratio. From $m_0/m_f = 4$ to $\Delta v = 2 v_e \ln 2$, you'd need $m_0/m_f = 16$. That means **94% of your starting mass is propellant**. For a hydrogen/oxygen upper stage ($v_e \approx 4.4$ km/s) this is hard but possible. For a model rocket ($v_e \approx 0.8$ km/s) it's why you don't reach orbit in your backyard.
+
+## Try it
+
+<Tsiolkovsky />
+
+Slide the propellant mass fraction toward 0.9, watch $\Delta v$ jump. Slide it to 0.95 (most launchers don't get there), notice the diminishing returns.
+
+## Why staging exists
+
+If you can't push the mass fraction high enough in one stage, you drop empty stages. Each stage is a mini-rocket with its own $\Delta v$ budget, and the total $\Delta v$ is the sum. A two-stage rocket with mass fraction 0.85 each gets you:
+
+$$
+\Delta v_\text{total} = v_e \, \ln\!\frac{1}{0.15} + v_e \, \ln\!\frac{1}{0.15} \approx 3.8 \, v_e
+$$
+
+vs a single stage with the same total mass fraction (which would just be $\ln(1/0.15) \approx 1.9 v_e$).
+
+That's nearly twice as much $\Delta v$ for the same fuel, just by not dragging an empty tank along for the second half of the climb. Chapter 7 makes this concrete.
+
+<OpenInWorkbench example="Clustered_motors" label="Open a clustered-motor rocket — more thrust, same Isp" />

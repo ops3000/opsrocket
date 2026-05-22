@@ -1,13 +1,16 @@
 // File-system backed skill registry. Each entry under `web/skills/` is a
 // markdown file with YAML-ish frontmatter (single-line `key: value`) and
-// a markdown body. Loaded once at module init (server-side, Node only)
-// and cached. The chat exposes:
+// a markdown body. We also pull in the /learn chapters (content/learn/*.mdx)
+// as synthetic `learn-<slug>` skills so the copilot can quote them.
+// Loaded once at module init (server-side, Node only) and cached.
+// The chat exposes:
 //   1. SYSTEM_PROMPT lists every skill's name + description (cheap routing
 //      cue for the model)
 //   2. `load_skill(name)` MCP-style tool returns the body on demand
 // Same surface is shared by /mcp so Claude Code clients see the tools too.
 import fs from "fs";
 import path from "path";
+import { loadChapters, stripMdxWidgets } from "./learn";
 
 export type SkillDef = {
   name: string;
@@ -54,6 +57,15 @@ export function loadSkills(): SkillDef[] {
         name: meta.name,
         description: meta.description,
         body,
+      });
+    }
+    // Also ingest /learn chapters as `learn-<slug>` skills with MDX widget
+    // tags stripped to plain markdown.
+    for (const ch of loadChapters()) {
+      out.push({
+        name: `learn-${ch.slug}`,
+        description: `Learn chapter ${ch.chapter}: ${ch.title} — ${ch.description}`,
+        body: `# ${ch.title}\n\n${stripMdxWidgets(ch.body)}`,
       });
     }
     cache = out.sort((a, b) => a.name.localeCompare(b.name));

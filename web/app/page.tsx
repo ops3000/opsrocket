@@ -24,6 +24,9 @@ export default function Home() {
             </span>
           </div>
           <div className="mono hidden gap-7 text-xs text-muted sm:flex">
+            <Link href="/learn" className="hover:text-ink">
+              LEARN
+            </Link>
             <Link href="/parity" className="hover:text-ink">
               PARITY
             </Link>

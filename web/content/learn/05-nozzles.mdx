@@ -1,0 +1,48 @@
+---
+slug: nozzles
+title: Nozzles — why they're shaped like that
+description: Converging-diverging geometry, choked flow, area ratio, and what over- vs under-expanded actually mean.
+chapter: 5
+tags: [nozzle, supersonic, expansion-ratio]
+---
+
+A rocket nozzle is a small, hot, very loud bit of fluid mechanics. Its job is to take high-pressure gas from the combustion chamber and convert as much of that pressure energy into directed kinetic energy as possible. The shape — converging, then diverging, like an hourglass on its side — does the conversion.
+
+## Subsonic in, supersonic out
+
+In a converging duct, **subsonic** gas accelerates as the area shrinks (think: garden-hose nozzle). But at exactly Mach 1, something flips: in a **diverging** duct, supersonic gas accelerates further as the area *grows*. This is one of those facts you have to take on faith from compressible-flow class, then it stops surprising you.
+
+So the converging-diverging (Laval) nozzle is two ideas glued together:
+
+1. Converging section squeezes the chamber gas through the **throat** at exactly Mach 1. This is called **choked flow** — the mass-flow rate through the throat is fixed by chamber conditions, regardless of what's downstream.
+2. Diverging section expands the supersonic flow, dropping pressure further and ramping velocity up to whatever the geometry allows.
+
+## The expansion ratio
+
+The single most important nozzle parameter is the **area ratio**:
+
+$$
+\epsilon = \frac{A_e}{A_t}
+$$
+
+Exit area over throat area. Bigger $\epsilon$ means more expansion, lower exit pressure, faster exhaust. For an ideal gas in choked flow:
+
+$$
+\frac{A_e}{A_t} = \left(\frac{2}{k+1}\right)^{\!1/(k-1)} \frac{1}{M_e} \left(1 + \frac{k-1}{2} M_e^2\right)^{\!(k+1)/2(k-1)}
+$$
+
+Don't memorize this. The shape that matters: larger $\epsilon$ → higher exit Mach → more thrust. But you can't go arbitrarily large.
+
+## Over- and under-expanded
+
+The pressure thrust term from chapter 2 was $(p_e - p_\infty) A_e$. The nozzle designer picks $\epsilon$ to set $p_e$. Three cases:
+
+- $p_e > p_\infty$ — **under-expanded**. Gas keeps expanding after leaving the nozzle. Some thrust left on the table. Common in vacuum-optimized engines that fire at sea level briefly during testing.
+- $p_e = p_\infty$ — **perfectly expanded**. Maximum thrust at this altitude.
+- $p_e < p_\infty$ — **over-expanded**. Gas is at lower pressure than the surrounding air. Flow can separate from the nozzle wall, which is structurally bad. Severe over-expansion produces visible Mach diamonds and can shake an engine apart.
+
+Sea-level launchers compromise: small enough $\epsilon$ that the engine doesn't over-expand badly at liftoff, but large enough to still produce decent $I_{sp}$ at altitude. Vacuum-stage engines use much bigger $\epsilon$ — the RL10 sits at ~84:1, the J-2 at ~28:1. Compare to an Estes nozzle at maybe 4:1.
+
+> **Hobby aside.** A black-powder motor's nozzle is a small ceramic insert. You can't tune $\epsilon$ once it's pressed — but you *can* see the consequence: the exhaust plume's shape. A clean, parallel jet means matched expansion; a flared or diamond-pattern plume means it's off-design.
+
+Most of the math here is for understanding, not for picking parts. For model and high-power rocketry, the manufacturer already nailed the nozzle; your job is to pick the right motor for your rocket's mass and impulse needs. The next chapter is where you actually do work as a designer.

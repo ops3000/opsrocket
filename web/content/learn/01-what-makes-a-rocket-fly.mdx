@@ -1,0 +1,33 @@
+---
+slug: what-makes-a-rocket-fly
+title: What makes a rocket fly
+description: Newton's third law in one breath — and why a rocket doesn't need air to push against.
+chapter: 1
+tags: [newton, thrust, intuition]
+---
+
+Stand on a skateboard with a basketball. Throw the ball forward, you roll backward. That's it. That's a rocket.
+
+Every rocket — from an Estes A8 to the Saturn V — is a machine for throwing **mass out the back** as fast as possible. Newton's third law does the rest: whatever momentum the exhaust carries one way, the rocket gains the other way.
+
+## The recurring confusion
+
+A balloon let go in a room doesn't fly because air is "pushing it forward against something." It flies because air leaves the nozzle with momentum, and momentum has to balance. The room could be a vacuum and the balloon would still go — just for a shorter time, because air in the room isn't accelerating it; only its own escaping air is.
+
+This matters because outside Earth's atmosphere there *is no* "something to push against." Yet rockets work fine in space. They have to: that's where they spend most of their job.
+
+## What "thrust" actually is
+
+When mass flows out the back at velocity $v_e$, the engine experiences a forward force equal to the mass-flow rate times that velocity:
+
+$$
+F = \dot{m} \, v_e
+$$
+
+That's the simplest possible statement of thrust. A heavier exhaust at the same speed gives more push. A faster exhaust at the same mass-flow rate gives more push. Solid motors and liquid engines both work this way — they just produce the $\dot{m}$ and $v_e$ very differently.
+
+The two next chapters fill in the corrections (there's a pressure term we're ignoring, and a clean way to compare engines that don't share the same gas). For now, hold this in your head:
+
+> A rocket is a thing that throws stuff backward to go forward. Everything else is engineering.
+
+<OpenInWorkbench example="A_simple_model_rocket" label="See a single-stage model rocket in flight" />

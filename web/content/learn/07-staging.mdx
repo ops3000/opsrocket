@@ -1,0 +1,61 @@
+---
+slug: staging
+title: Multi-stage rockets
+description: When and why to stage — and the surprisingly simple math that says "drop dead weight as soon as it's empty."
+chapter: 7
+tags: [staging, multistage, mass-ratio]
+---
+
+Chapter 4 ended with a hint: staging buys you $\Delta v$ that single-stage rockets can't reach. This chapter makes that concrete.
+
+## The dead-weight problem
+
+In a single-stage rocket, once the propellant is gone, you keep carrying the empty propellant tank, the engine, the pressurization plumbing — all the way to apogee. None of it contributes thrust anymore; all of it cuts into your final mass ratio.
+
+The rocket equation is unforgiving about this. With $v_e = 0.8$ km/s (a typical model-rocket motor) and a final mass fraction of 0.5 (half your rocket is stuff that isn't propellant — pretty optimistic for a hobby build), you get:
+
+$$
+\Delta v = 800 \cdot \ln\!\frac{1}{0.5} \approx 555 \text{ m/s}
+$$
+
+That's roughly the burnout velocity of a well-designed C-impulse rocket — match to reality.
+
+## The staging trick
+
+Now imagine the same rocket but built as two stages: stage 1 has its own motor and burns out, separates, falls away. Stage 2 has its own motor and ignites. Each stage starts with a full propellant tank attached to *only its own* dry mass.
+
+Assume each stage has $m_\text{prop}/m_\text{wet} = 0.5$ as before, and assume the upper stage is small enough that the booster ignores it (it's not — but the calculation gets messy fast). Then:
+
+$$
+\Delta v_\text{total} \approx \Delta v_1 + \Delta v_2 = 555 + 555 = 1110 \text{ m/s}
+$$
+
+The booster delivered the first 555 m/s of velocity. By the time the upper stage lights, the booster's mass is already gone. The upper stage now does its own full Δv from a much smaller starting mass.
+
+The **price** is engineering complexity: separation mechanism, timing, ignition reliability of the second motor, and a recovery system for each stage.
+
+## When staging pays off
+
+For low-impulse models, staging is usually overkill — you're chasing 60 m/s more apogee at the cost of doubling the parts count. Staging starts to make sense when:
+
+- The mission $\Delta v$ exceeds 0.7–0.8× $v_e$ (so $\ln(m_0/m_f) > 0.7$, mass ratio > 2).
+- The dry mass of stage 1's engineering is comparable to its propellant.
+- You actually want apogee at high altitude rather than peak velocity.
+
+For orbital launch ($\Delta v \approx 9.4$ km/s), staging isn't optional. Even with $I_{sp} = 450$ s ($v_e \approx 4.4$ km/s), a single-stage-to-orbit would need mass ratio $e^{9400/4400} \approx 8.5$ — meaning 88% propellant. No one has built one.
+
+## Separation events
+
+A real two-stage flight has a tight sequence of events:
+
+1. **Stage 1 burnout** — main motor stops thrusting.
+2. **Stage 1 separation** — pyrotechnic charge or motor-eject mechanism pushes the booster away.
+3. **Stage 2 ignition** — second motor lights. Often timed by a delay charge in stage 1.
+4. **Stage 2 burnout** — coast phase begins.
+5. **Apogee + ejection** — recovery system deploys for whichever stages have one.
+
+Get the timing wrong and you can ignite stage 2 while stage 1 is still mechanically attached (bad), or coast too long between burnout and ignition (large velocity loss to gravity). The workbench simulates this with explicit Burnout / Ejection / Upper-stage ignition events.
+
+<OpenInWorkbench example="Two_stage_high_power_rocket" label="Open a real two-stage build and watch the staging events" />
+
+Now jump to chapter 8 — every rocket has to come back down.

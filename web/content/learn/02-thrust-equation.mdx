@@ -1,0 +1,44 @@
+---
+slug: thrust-equation
+title: The thrust equation
+description: Where the F = ṁ·v_e + (p_e − p_∞)·A_e form comes from, and when each term matters.
+chapter: 2
+tags: [thrust, nozzle, pressure]
+---
+
+Chapter 1 left you with $F = \dot{m} v_e$. That's the **momentum thrust** — exhaust gas, mass flow times velocity. It's also incomplete.
+
+Real engines also push because the gas leaving the nozzle exit is at some pressure $p_e$ that may not match ambient $p_\infty$. The nozzle wall doesn't see ambient pressure on its inside face; it sees combustion-chamber pressure tapered down through the throat and bell. The net result of integrating that pressure over the engine's geometry is a second force term:
+
+<Eq label="(2.1)">
+$$
+F = \dot{m} v_e + (p_e - p_\infty) A_e
+$$
+</Eq>
+
+This is the **thrust equation** as it appears in Sutton's chapter 3. Two terms:
+
+- $\dot{m} v_e$ — momentum thrust. This is most of it. Always positive.
+- $(p_e - p_\infty) A_e$ — pressure thrust. Sign depends on whether the nozzle is over-expanded ($p_e < p_\infty$), perfectly expanded ($p_e = p_\infty$), or under-expanded ($p_e > p_\infty$).
+
+## When does pressure thrust matter
+
+For an Estes black-powder C6 firing at sea level: maybe 5% of total thrust at peak, less at average. Negligible for sketching the trajectory; significant if you're modeling motor design.
+
+For a liquid first-stage engine like the Merlin: the nozzle is sized for somewhere between sea level and vacuum. At launch it's *over-expanded* — gas exits below ambient, so the pressure term **subtracts** thrust. At altitude, ambient drops and the engine gains thrust. That's why the same engine produces ~10% more vacuum thrust than sea-level thrust.
+
+The vacuum case ($p_\infty = 0$) collapses to the cleanest form:
+
+$$
+F_\text{vac} = \dot{m} v_e + p_e A_e = \dot{m} v_{eq}
+$$
+
+where $v_{eq}$ is called the **equivalent exhaust velocity** — the velocity you'd get if all the thrust came from momentum alone. Engineers quote it as a single number and chapter 3's $I_{sp}$ falls right out of it.
+
+## Try it
+
+Plug in a chamber temperature, chamber pressure, exit pressure, gas-property numbers, and watch the exhaust velocity move. The thrust scales linearly with $\dot{m}$, but $v_e$ is set by the thermodynamics of the gas expansion:
+
+<IspCalc />
+
+The next chapter explains the units coming out of that bottom-right box.

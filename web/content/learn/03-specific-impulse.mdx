@@ -1,0 +1,50 @@
+---
+slug: specific-impulse
+title: Specific impulse
+description: What Isp means, why it's measured in seconds, and a feel for the numbers from C6 to LH2/LOX.
+chapter: 3
+tags: [isp, performance, fuel]
+---
+
+Specific impulse, $I_{sp}$, is the single most quoted number in propulsion. It's a fuel-efficiency rating for rocket engines.
+
+The definition is straightforward:
+
+<Eq label="(3.1)">
+$$
+I_{sp} = \frac{F}{\dot{m}\, g_0}
+$$
+</Eq>
+
+Force per weight-flow of propellant. Units come out as **seconds**, which is universally confusing on first contact. Here's how to read it: if your engine produces $F$ Newtons of thrust, $g_0 \cdot I_{sp}$ tells you how many seconds you could keep that thrust running if you burned propellant at a rate of 1 N of weight per second.
+
+But the easier mental model: $I_{sp}$ is just $v_e / g_0$ in disguise. A higher $I_{sp}$ means faster exhaust, which means more push per kilogram of propellant. That's it.
+
+## A feel for the numbers
+
+| Engine | Propellant | $I_{sp}$ (vac, s) |
+|---|---|---|
+| Estes C6 | Black powder | ~80 |
+| Estes E12 | Black powder | ~95 |
+| AeroTech H128W | APCP composite | ~210 |
+| RD-180 | Kerosene / LOX | 338 |
+| F-1 (Saturn V S-IC) | Kerosene / LOX | 304 |
+| J-2 (Saturn V S-II) | LH2 / LOX | 421 |
+| RS-25 (Space Shuttle) | LH2 / LOX | 452 |
+| NEXT ion engine | Xenon (electric) | 4170 |
+
+Two things to notice:
+
+1. **Chemical rockets cap out around 450 s** for LH2/LOX. There's no clever chemistry left to wring more out of the energy density. Past that, you switch to electric propulsion (high $I_{sp}$, tiny thrust) or nuclear (great $I_{sp}$, regulatory nightmare).
+
+2. **Hobby motors are an order of magnitude below liquid first stages.** That's why model rockets need such a high mass-fraction of propellant for even short hops — chapter 4 (the rocket equation) will make this brutally concrete.
+
+## The thrust curve
+
+A real motor's thrust isn't constant. Black-powder motors have a sharp peak followed by a slow tail; composite motors look more rectangular. The $I_{sp}$ quoted on the label is an average; the curve is what determines your max acceleration and where the rocket leaves the launch rod.
+
+<MotorCurve designation="C6-3" />
+
+<MotorCurve designation="H128W-M" />
+
+The C6 spikes briefly above 14 N before settling into a long ~2 N tail; the H128W stays close to its 128 N average for the whole 1.65 s burn. Same $I_{sp}$ class, very different flight feel.

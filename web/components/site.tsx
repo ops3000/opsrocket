@@ -14,6 +14,7 @@ import {
 } from "@/lib/data";
 
 const NAV: [string, string][] = [
+  ["LEARN", "/learn"],
   ["PARITY", "/parity"],
   ["VALIDATION", "/validation"],
   ["RENDER", "/render"],

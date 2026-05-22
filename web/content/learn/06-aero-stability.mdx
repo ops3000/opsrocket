@@ -1,0 +1,54 @@
+---
+slug: aero-stability
+title: Aerodynamics and stability
+description: Center of pressure vs center of gravity, the caliber margin, Barrowman's method, and why fins.
+chapter: 6
+tags: [aero, stability, cp, cg, barrowman]
+---
+
+A rocket with the wrong fins doesn't fly badly — it goes sideways into the audience. Stability is the single thing a designer must get right before any of the propulsion math matters.
+
+## The two centers
+
+Two points on the rocket determine its rotational behavior:
+
+- **Center of gravity (CG)** — where the rocket's mass is balanced. A function of how heavy each section is. Found by simple integration.
+- **Center of pressure (CP)** — where the aerodynamic forces act when the rocket is at an angle. A function of how much surface area each section has and where, especially the fins.
+
+When the rocket tilts slightly into the wind (a small angle of attack $\alpha$), aerodynamic forces try to either restore the rocket to alignment or amplify the tilt:
+
+- If **CP is behind CG**: aerodynamic force creates a restoring torque. Rocket self-corrects. **Stable.**
+- If **CP is in front of CG**: aerodynamic force amplifies the tilt. Rocket tumbles. **Unstable.**
+
+A passenger plane has its center of pressure ahead of CG and survives because the pilot keeps correcting. A free-flying rocket has no pilot. It must be passively stable.
+
+## The caliber
+
+How much margin you need is quantified in **calibers** — the distance from CG to CP, divided by the maximum body diameter:
+
+<Eq label="(6.1)">
+$$
+\text{margin} = \frac{\text{CG to CP}}{D_{\text{max}}}
+$$
+</Eq>
+
+Rule of thumb for model and mid-power rocketry: **0.5 to 2 calibers stable** is the sweet spot. Less than 0.5 and the rocket wanders. More than 2 and the rocket **weathercocks** badly — turning sharply into any crosswind, sometimes enough to land downwind of the launch pad.
+
+## Barrowman's method
+
+In 1966, James Barrowman wrote a NASA technical note that gives you the CP of a finned rocket in closed form, summing contributions from each component (nosecone, body transitions, fins). The OpsRocket workbench (and Java OpenRocket before it) implement this exactly. You don't need to know the algebra to use it — you just need to:
+
+1. Build the rocket in the workbench.
+2. Watch the **CP** and **CG** markers on the side view.
+3. Adjust fins, ballast, or motor placement until CP is comfortably behind CG.
+
+Two specific knobs:
+
+- **Move CG forward** by adding nose weight or moving payload up. Increases margin.
+- **Move CP backward** by adding fin area or sweep. Increases margin.
+
+Big swept fins are how giant rockets get away with extreme aspect ratios — the fin area is the dominant CP contributor.
+
+<OpenInWorkbench example="A_simple_model_rocket" label="Open a simple rocket — drag fins, watch the margin change" />
+
+When you load it, look for the **statbar** at the top of the workbench. It shows mass, CG, CP, stability margin in calibers, reference diameter, and Cd. Move the fins around in the schematic — the numbers update live. That's the entire core of rocket-design ergonomics in one panel.
