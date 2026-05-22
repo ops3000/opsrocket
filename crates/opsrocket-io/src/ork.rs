@@ -76,13 +76,38 @@ pub struct CachedSimulation {
     /// (OpenRocket default "spherical").
     pub geodetic_method: String,
     pub wind_average: f64,
+    /// Wind average standard deviation (m/s). Independent of turbulence
+    /// intensity — OpenRocket has a separate `<windaveragedeviation>` knob
+    /// for stochastic launch-to-launch variation. Default 0.2 m/s.
+    pub wind_standard_deviation: f64,
     /// Wind turbulence intensity (fraction). OpenRocket default 0.1.
     pub wind_turbulence: f64,
     /// Wind direction (radians). OpenRocket default π/2 (from east).
     pub wind_direction: f64,
+    /// When true, use the International Standard Atmosphere model — ignore
+    /// `launch_temperature` / `launch_pressure`. Default true (matches the
+    /// OpenRocket dialog's pre-checked "Use ISA" box).
+    pub use_isa: bool,
+    /// When true, the launch rod azimuth is locked to (or opposite of) the
+    /// wind direction. UI-only convenience — the engine reads
+    /// `launch_rod_direction` either way.
+    pub launch_into_wind: bool,
+    /// Optional discrete wind profile. When non-empty AND
+    /// `use_multi_level_wind` is true, the engine interpolates speed +
+    /// direction by altitude. When empty / off, falls back to wind_average.
+    pub wind_layers: Vec<WindLayer>,
+    pub use_multi_level_wind: bool,
     pub time_step: f64,
     pub max_time: f64,
     pub cached: Option<CachedFlightData>,
+}
+
+/// One discrete altitude layer for the multi-level wind profile.
+#[derive(Debug, Clone, Copy)]
+pub struct WindLayer {
+    pub altitude_m: f64,
+    pub speed_ms: f64,
+    pub direction_rad: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -1432,8 +1457,13 @@ fn parse_simulation(reader: &mut Reader<&[u8]>) -> Result<CachedSimulation> {
         launch_longitude: 0.0,
         geodetic_method: "spherical".to_string(),
         wind_average: 0.0,
+        wind_standard_deviation: 0.2,
         wind_turbulence: 0.1,
         wind_direction: std::f64::consts::FRAC_PI_2,
+        use_isa: true,
+        launch_into_wind: true,
+        wind_layers: Vec::new(),
+        use_multi_level_wind: false,
         time_step: 0.05,
         max_time: 1200.0,
         cached: None,
@@ -1461,6 +1491,28 @@ fn parse_simulation(reader: &mut Reader<&[u8]>) -> Result<CachedSimulation> {
     Ok(s)
 }
 
+fn parse_wind_layer(reader: &mut Reader<&[u8]>) -> Result<WindLayer> {
+    let mut layer = WindLayer { altitude_m: 0.0, speed_ms: 0.0, direction_rad: 0.0 };
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf)? {
+            Event::Start(e) => {
+                match e.name().as_ref() {
+                    b"altitude" => layer.altitude_m = parse_f64(reader, b"altitude")?,
+                    b"speed" => layer.speed_ms = parse_f64(reader, b"speed")?,
+                    b"direction" => layer.direction_rad = parse_f64(reader, b"direction")?,
+                    other => skip_to_end(reader, other)?,
+                }
+            }
+            Event::End(e) if e.name().as_ref() == b"windlevel" => break,
+            Event::Eof => return Err(Error::Malformed("EOF inside <windlevel>".into())),
+            _ => {}
+        }
+        buf.clear();
+    }
+    Ok(layer)
+}
+
 fn parse_conditions(reader: &mut Reader<&[u8]>, s: &mut CachedSimulation) -> Result<()> {
     let mut buf = Vec::new();
     loop {
@@ -1486,8 +1538,24 @@ fn parse_conditions(reader: &mut Reader<&[u8]>, s: &mut CachedSimulation) -> Res
                             read_text(reader, b"geodeticmethod")?.trim().to_lowercase()
                     }
                     b"windaverage" => s.wind_average = parse_f64(reader, b"windaverage")?,
+                    b"windaveragedeviation" => {
+                        s.wind_standard_deviation =
+                            parse_f64(reader, b"windaveragedeviation")?
+                    }
                     b"windturbulence" => s.wind_turbulence = parse_f64(reader, b"windturbulence")?,
                     b"winddirection" => s.wind_direction = parse_f64(reader, b"winddirection")?,
+                    b"useisamodel" => {
+                        s.use_isa = read_text(reader, b"useisamodel")?.trim() == "true"
+                    }
+                    b"launchintowind" => {
+                        s.launch_into_wind =
+                            read_text(reader, b"launchintowind")?.trim() == "true"
+                    }
+                    b"usemultilevelwind" => {
+                        s.use_multi_level_wind =
+                            read_text(reader, b"usemultilevelwind")?.trim() == "true"
+                    }
+                    b"windlevel" => s.wind_layers.push(parse_wind_layer(reader)?),
                     b"timestep" => s.time_step = parse_f64(reader, b"timestep")?,
                     b"maxtime" => s.max_time = parse_f64(reader, b"maxtime")?,
                     other => skip_to_end(reader, other)?,

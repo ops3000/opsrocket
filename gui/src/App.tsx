@@ -36,6 +36,7 @@ import { PropertyEditor, FieldList } from "./components/PropertyEditor";
 import { COMPONENT_ICONS } from "./lib/component-icons";
 import { MotorsPanel } from "./components/MotorsPanel";
 import { AnalysisPanel } from "./components/AnalysisPanel";
+import { SimulationModal } from "./components/SimulationModal";
 
 // Chrome-free capture route: #raw=<orkPath>|<figure|unfinished|finished>|<angleIdx>
 // Renders ONLY a 1280x720 RocketView3D with OpenRocket's exact camera, for
@@ -100,6 +101,12 @@ function Workbenchful() {
   const [vSplit, setVSplit] = useState(0.5);
   // id of the tree node whose "add child" picker is open (null = none)
   const [addFor, setAddFor] = useState<string | null>(null);
+  const [simModalOpen, setSimModalOpen] = useState(false);
+  const [seriesToggles, setSeriesToggles] = useState<{
+    altitude: boolean;
+    velocity: boolean;
+    thrust: boolean;
+  }>({ altitude: true, velocity: true, thrust: false });
 
   useEffect(() => {
     listFixtures()
@@ -529,6 +536,19 @@ function Workbenchful() {
 
   return (
     <div className="app">
+      <SimulationModal
+        open={simModalOpen}
+        sim={sim}
+        simNode={simNode}
+        busy={busy}
+        fd={fd}
+        rocketName={rv?.name ?? "rocket"}
+        seriesToggles={seriesToggles}
+        onSeriesChange={setSeriesToggles}
+        onPatch={(_s, key, value) => onPatchSim(key, value)}
+        onRun={simulate}
+        onClose={() => setSimModalOpen(false)}
+      />
       <header
         ref={headerRef}
         onWheel={onHeaderWheel}
@@ -566,10 +586,11 @@ function Workbenchful() {
               }))}
             />
             <button
-              onClick={simulate}
-              disabled={busy || !rv.simulations.length}
+              onClick={() => setSimModalOpen(true)}
+              disabled={busy || !rv.simulations.length || !sim}
+              title="Edit simulation conditions and run"
             >
-              Simulate
+              New simulation
             </button>
             <button
               className="ghost"

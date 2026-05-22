@@ -586,8 +586,38 @@ fn render_simulations(out: &mut String, sims: &[CachedSimulation]) {
         push_text(out, 4, "launchlongitude", &s.launch_longitude.to_string());
         push_text(out, 4, "geodeticmethod", &s.geodetic_method);
         push_text(out, 4, "windaverage", &s.wind_average.to_string());
+        push_text(
+            out,
+            4,
+            "windaveragedeviation",
+            &s.wind_standard_deviation.to_string(),
+        );
         push_text(out, 4, "windturbulence", &s.wind_turbulence.to_string());
         push_text(out, 4, "winddirection", &s.wind_direction.to_string());
+        push_text(out, 4, "useisamodel", if s.use_isa { "true" } else { "false" });
+        push_text(
+            out,
+            4,
+            "launchintowind",
+            if s.launch_into_wind { "true" } else { "false" },
+        );
+        if !s.wind_layers.is_empty() {
+            push_text(
+                out,
+                4,
+                "usemultilevelwind",
+                if s.use_multi_level_wind { "true" } else { "false" },
+            );
+            for layer in &s.wind_layers {
+                indent(out, 4);
+                out.push_str("<windlevel>\n");
+                push_text(out, 5, "altitude", &layer.altitude_m.to_string());
+                push_text(out, 5, "speed", &layer.speed_ms.to_string());
+                push_text(out, 5, "direction", &layer.direction_rad.to_string());
+                indent(out, 4);
+                out.push_str("</windlevel>\n");
+            }
+        }
         push_text(out, 4, "timestep", &s.time_step.to_string());
         push_text(out, 4, "maxtime", &s.max_time.to_string());
         indent(out, 3);

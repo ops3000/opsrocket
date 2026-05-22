@@ -167,6 +167,17 @@ export const listPresets = (
     contains?: string;
   } = {},
 ): Promise<{ presets: Preset[] }> => req("list_presets", "POST", filter);
+
+export interface SimWarning {
+  kind: "info" | "warn" | "error";
+  category: string;
+  message: string;
+}
+
+export const simWarnings = (
+  sim_name?: string,
+): Promise<{ warnings: SimWarning[] }> =>
+  req("sim_warnings", "POST", { sim_name });
 export interface EditNode {
   id: string;
   kind: string;

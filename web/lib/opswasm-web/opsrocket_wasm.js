@@ -315,6 +315,34 @@ export function mcp_parity(bytes, index) {
  * @param {string | null} [sim_name]
  * @returns {string}
  */
+export function mcp_sim_warnings(bytes, sim_name) {
+    let deferred4_0;
+    let deferred4_1;
+    try {
+        const ptr0 = passArray8ToWasm0(bytes, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        var ptr1 = isLikeNone(sim_name) ? 0 : passStringToWasm0(sim_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len1 = WASM_VECTOR_LEN;
+        const ret = wasm.mcp_sim_warnings(ptr0, len0, ptr1, len1);
+        var ptr3 = ret[0];
+        var len3 = ret[1];
+        if (ret[3]) {
+            ptr3 = 0; len3 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred4_0 = ptr3;
+        deferred4_1 = len3;
+        return getStringFromWasm0(ptr3, len3);
+    } finally {
+        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+    }
+}
+
+/**
+ * @param {Uint8Array} bytes
+ * @param {string | null} [sim_name]
+ * @returns {string}
+ */
 export function mcp_simulate(bytes, sim_name) {
     let deferred4_0;
     let deferred4_1;

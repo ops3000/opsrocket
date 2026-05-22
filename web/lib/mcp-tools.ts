@@ -498,6 +498,23 @@ export const TOOLS: ToolDef[] = [
   },
 
   {
+    name: "sim_warnings",
+    description:
+      "Pre-flight check against the design + a simulation's launch conditions: motor present, stability margin, recovery, time-step coarseness, multi-stage parity hint. Returns a list of {kind: info|warn|error, category, message}.",
+    inputSchema: { ...ROCKET_INPUT, sim_name: z.string().optional() },
+    handler: async (a, { req }) => {
+      try {
+        const b = await resolveRocket(req, pickInput(a));
+        return ok(
+          JSON.parse(ops.mcp_sim_warnings(b, a.sim_name as string | undefined)),
+        );
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  },
+
+  {
     name: "component_mass",
     description:
       "Mass of a single component (grams) in the current design. Find comp_id via inspect's tree.",

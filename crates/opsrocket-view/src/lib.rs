@@ -7,6 +7,7 @@ pub mod analysis;
 pub mod motors;
 pub mod schema;
 pub mod sim;
+pub mod warnings;
 
 use opsrocket_core::component::{Component, Rocket, Stage};
 use opsrocket_core::profile::shape_radius;

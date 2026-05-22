@@ -127,8 +127,13 @@ fn run(designation: &str, ejection: f64, empty_mass: f64) -> f64 {
         geodetic_method: "spherical".into(),
         launch_rod_direction: 0.0,
         wind_average: 0.0, // calm; thesis flights were low-wind
+        wind_standard_deviation: 0.0,
         wind_turbulence: 0.1,
         wind_direction: std::f64::consts::FRAC_PI_2,
+        use_isa: true,
+        launch_into_wind: true,
+        wind_layers: Vec::new(),
+        use_multi_level_wind: false,
         time_step: 0.05,
         max_time: 60.0,
         cached: None,

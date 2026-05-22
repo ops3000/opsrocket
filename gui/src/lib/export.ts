@@ -17,17 +17,31 @@ function download(blob: Blob, filename: string) {
   URL.revokeObjectURL(a.href);
 }
 
-// Flight-simulation data as CSV (was App.exportCsv; unchanged columns).
+// Flight-simulation data as CSV. `columns` selects which series to emit;
+// defaults to all four. Time is always the first column.
 export function exportFlightCsv(
   fd: FlightData,
   name: string,
   sim: string,
+  columns?: { altitude?: boolean; velocity?: boolean; thrust?: boolean },
 ): void {
-  const head = "time_s,altitude_m,velocity_ms,thrust_N";
-  const rows = fd.time.map(
-    (t, i) => `${t},${fd.altitude[i]},${fd.velocity[i]},${fd.thrust[i]}`,
-  );
-  const blob = new Blob([head + "\n" + rows.join("\n")], {
+  const o = {
+    altitude: columns?.altitude ?? true,
+    velocity: columns?.velocity ?? true,
+    thrust: columns?.thrust ?? true,
+  };
+  const headParts = ["time_s"];
+  if (o.altitude) headParts.push("altitude_m");
+  if (o.velocity) headParts.push("velocity_ms");
+  if (o.thrust) headParts.push("thrust_N");
+  const rows = fd.time.map((t, i) => {
+    const cells = [String(t)];
+    if (o.altitude) cells.push(String(fd.altitude[i]));
+    if (o.velocity) cells.push(String(fd.velocity[i]));
+    if (o.thrust) cells.push(String(fd.thrust[i]));
+    return cells.join(",");
+  });
+  const blob = new Blob([headParts.join(",") + "\n" + rows.join("\n")], {
     type: "text/csv",
   });
   download(blob, `${stem(name)}_${sim || "sim"}.csv`);

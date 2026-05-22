@@ -68,10 +68,18 @@ pub struct SimulationOptions {
     pub launch_azimuth_rad: f64,
     pub launch_pitch_deg: f64,
     pub wind_average: f64,
+    /// Standard deviation of the mean wind across runs (m/s). When non-zero
+    /// the run shifts `wind_average` by `wind_seed`-derived Gaussian noise
+    /// before the per-step turbulence kicks in. Default 0.0 (deterministic).
+    pub wind_standard_deviation: f64,
     /// Wind turbulence intensity (σ/mean). OpenRocket default 0.1.
     pub wind_turbulence: f64,
     /// Wind direction (radians). OpenRocket default π/2 (an "east wind").
     pub wind_direction: f64,
+    /// When true the atmosphere falls back to International Standard
+    /// Atmosphere at `launch_altitude`, ignoring the temperature/pressure
+    /// fields.
+    pub use_isa: bool,
     /// Pink-noise RNG seed.
     pub wind_seed: i64,
     pub motor: Option<MotorChoice>,
@@ -126,8 +134,10 @@ impl Default for SimulationOptions {
             launch_azimuth_rad: 0.0,
             launch_pitch_deg: 0.0,
             wind_average: 0.0,
+            wind_standard_deviation: 0.0,
             wind_turbulence: 0.1,
             wind_direction: std::f64::consts::FRAC_PI_2,
+            use_isa: true,
             wind_seed: 0,
             motor: None,
         }
@@ -455,8 +465,10 @@ pub fn simulate_with(
         launch_azimuth_rad: sim.launch_rod_direction,
         launch_pitch_deg: sim.launch_rod_angle.to_degrees(),
         wind_average: sim.wind_average,
+        wind_standard_deviation: sim.wind_standard_deviation,
         wind_turbulence: sim.wind_turbulence,
         wind_direction: sim.wind_direction,
+        use_isa: sim.use_isa,
         wind_seed: 0,
         motor: motors_dir.map(|d| MotorChoice::Designation {
             designation: String::new(),

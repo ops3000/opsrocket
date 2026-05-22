@@ -412,6 +412,105 @@ input[type="checkbox"]:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 14, 8, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.modal {
+  width: min(720px, calc(100vw - 60px));
+  max-height: calc(100vh - 80px);
+  display: flex;
+  flex-direction: column;
+  background: #fffaf0;
+  border-radius: 14px;
+  box-shadow: 0 24px 56px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+}
+.modal-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+  font-size: 14px;
+}
+.modal-sub {
+  color: var(--muted);
+  margin-left: 8px;
+}
+.modal-close {
+  background: transparent;
+  border: none;
+  font-size: 22px;
+  color: var(--muted);
+  cursor: pointer;
+  line-height: 1;
+  padding: 0 4px;
+}
+.modal-close:hover { color: var(--ink); }
+.modal-body {
+  padding: 14px 18px;
+  overflow-y: auto;
+  flex: 1;
+}
+.modal-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.02);
+}
+.sim-modal .sim-tabs {
+  padding: 8px 18px 0;
+  margin-bottom: 0;
+}
+.warn-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.warn {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 6px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  font-size: 13px;
+  background: rgba(0, 0, 0, 0.02);
+}
+.warn-icon {
+  font-size: 16px;
+  line-height: 1;
+  margin-top: 1px;
+}
+.warn-msg { color: var(--ink); }
+.warn-cat {
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-top: 2px;
+}
+.warn-error {
+  border-color: rgba(255, 45, 120, 0.5);
+  background: rgba(255, 45, 120, 0.05);
+}
+.warn-error .warn-icon { color: rgb(255, 45, 120); }
+.warn-warn {
+  border-color: rgba(241, 158, 0, 0.55);
+  background: rgba(241, 158, 0, 0.08);
+}
+.warn-warn .warn-icon { color: rgb(218, 134, 0); }
+.warn-info .warn-icon { color: rgb(64, 144, 200); }
+
 .prop-tabs {
   display: flex;
   gap: 4px;

@@ -32,6 +32,8 @@ export function mcp_optimize(bytes: Uint8Array, params_json: string): string;
 
 export function mcp_parity(bytes: Uint8Array, index?: number | null): string;
 
+export function mcp_sim_warnings(bytes: Uint8Array, sim_name?: string | null): string;
+
 export function mcp_simulate(bytes: Uint8Array, sim_name?: string | null): string;
 
 export function mcp_stability(bytes: Uint8Array): string;
@@ -102,6 +104,7 @@ export interface InitOutput {
     readonly mcp_new_document: () => [number, number, number, number];
     readonly mcp_optimize: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly mcp_parity: (a: number, b: number, c: number) => [number, number, number, number];
+    readonly mcp_sim_warnings: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly mcp_simulate: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly mcp_stability: (a: number, b: number) => [number, number, number, number];
     readonly rocket_view: (a: number, b: number) => [number, number, number, number];

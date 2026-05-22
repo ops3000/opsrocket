@@ -88,6 +88,10 @@
           return J(w.mcp_list_materials());
         case "list_presets":
           return J(w.mcp_list_presets(JSON.stringify(body || {})));
+        case "sim_warnings": {
+          const bytes = w.session_save();
+          return J(w.mcp_sim_warnings(bytes, body.sim_name));
+        }
         case "component_mass": {
           // body.id = component id; takes the current session's bytes.
           const bytes = w.session_save();

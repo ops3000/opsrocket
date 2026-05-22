@@ -422,6 +422,17 @@ pub fn mcp_mass_breakdown(bytes: &[u8]) -> Result<String, JsError> {
 }
 
 #[wasm_bindgen]
+pub fn mcp_sim_warnings(bytes: &[u8], sim_name: Option<String>) -> Result<String, JsError> {
+    let doc = doc_from(bytes)?;
+    let warnings = opsrocket_view::warnings::sim_warnings(&doc, sim_name.as_deref());
+    ok_json(json!({
+        "engine_version": ENGINE_VERSION,
+        "count": warnings.len(),
+        "warnings": warnings,
+    }))
+}
+
+#[wasm_bindgen]
 pub fn mcp_list_presets(filter_json: &str) -> Result<String, JsError> {
     let p: Value = if filter_json.trim().is_empty() {
         json!({})

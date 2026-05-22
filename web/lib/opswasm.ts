@@ -57,6 +57,7 @@ type Ops = {
   mcp_list_motors(): string;
   mcp_list_materials(): string;
   mcp_list_presets(filterJson: string): string;
+  mcp_sim_warnings(b: Uint8Array, simName?: string): string;
   mcp_component_mass(b: Uint8Array, compId: string): string;
   mcp_edit_apply(b: Uint8Array, opsJson: string): Uint8Array;
 };
