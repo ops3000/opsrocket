@@ -4,13 +4,16 @@ import type { NextConfig } from "next";
 // patches fetch and services every /api/* call from the in-browser WASM
 // core before it ever hits the network. No backend, so no rewrites.
 const nextConfig: NextConfig = {
-  // The MCP route reads the OpsRocket wasm engine off the function
-  // filesystem at runtime; make sure the tracer ships it.
+  // The MCP route and the chat route both load the OpsRocket wasm engine
+  // (and chat reads skill markdown) off the function filesystem at
+  // runtime — make sure the file tracer ships them. Keys are picomatch
+  // globs against the route path; brackets in dynamic segments must be
+  // escaped (`[` → `\\[`), otherwise picomatch reads them as character
+  // classes and the recently-updated Vercel adapter trips on the empty
+  // resolved path. See node_modules/next/dist/docs/.../output.md.
   outputFileTracingIncludes: {
-    "/[transport]": ["./lib/opswasm-web/**", "./skills/**"],
-    "/[transport]/route": ["./lib/opswasm-web/**", "./skills/**"],
+    "/\\[transport\\]": ["./lib/opswasm-web/**", "./skills/**"],
     "/api/chat": ["./lib/opswasm-web/**", "./skills/**"],
-    "/api/chat/route": ["./lib/opswasm-web/**", "./skills/**"],
   },
   async headers() {
     return [
