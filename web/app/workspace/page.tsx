@@ -44,7 +44,7 @@ export default async function WorkspacePage({
       />
       <div className="pointer-events-none absolute inset-x-0 bottom-6 z-10 flex justify-center px-4">
         <div className="pointer-events-auto w-full max-w-xl">
-          <ChatPill />
+          <ChatPill autoApplyDesigns />
         </div>
       </div>
     </div>

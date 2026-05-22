@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Markdown } from "@/components/Markdown";
-import { useWorkbench, type WorkbenchState } from "@/lib/workbench-channel";
+import { useWorkbench } from "@/lib/workbench-channel";
 
 // Self-contained chat pill — input + agentic chat panel that unfolds
 // upward on submit. Reused on the hero (/) and the workbench (/workspace).
@@ -22,6 +22,7 @@ type ToolEvent = {
   result?: string;
   error?: string;
   ork_b64?: string;
+  autoApplied?: boolean;
   status: "running" | "done" | "error";
 };
 type AssistantPart =
@@ -96,20 +97,28 @@ function ToolChip({
               >
                 Open in Workbench →
               </a>
-              {onApply && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    onApply(event.ork_b64!);
-                    setApplied(true);
-                    window.setTimeout(() => setApplied(false), 1500);
-                  }}
-                  className="inline-flex items-center gap-1 rounded-full border border-[var(--accent2)] bg-[rgba(41,230,212,0.10)] px-2 py-0.5 text-[11px] font-semibold text-ink hover:bg-[rgba(41,230,212,0.20)]"
-                  title="Push this design into any open Workbench tab"
-                >
-                  {applied ? "✓ Sent" : "Apply to Workbench"}
-                </button>
-              )}
+              {onApply &&
+                (event.autoApplied ? (
+                  <span
+                    className="inline-flex items-center gap-1 rounded-full border border-[var(--good)] bg-[rgba(56,224,138,0.10)] px-2 py-0.5 text-[11px] font-semibold text-ink"
+                    title="This change was pushed into the open Workbench tab automatically."
+                  >
+                    ✓ Applied
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onApply(event.ork_b64!);
+                      setApplied(true);
+                      window.setTimeout(() => setApplied(false), 1500);
+                    }}
+                    className="inline-flex items-center gap-1 rounded-full border border-[var(--accent2)] bg-[rgba(41,230,212,0.10)] px-2 py-0.5 text-[11px] font-semibold text-ink hover:bg-[rgba(41,230,212,0.20)]"
+                    title="Push this design into any open Workbench tab"
+                  >
+                    {applied ? "✓ Sent" : "Apply to Workbench"}
+                  </button>
+                ))}
             </div>
           )}
         </div>
@@ -118,40 +127,17 @@ function ToolChip({
   );
 }
 
-function WorkbenchBadge({
-  state,
-  active,
-  onToggle,
+export function ChatPill({
+  autoApplyDesigns = false,
 }: {
-  state: WorkbenchState;
-  active: boolean;
-  onToggle: () => void;
-}) {
-  return (
-    <div className="mt-2 flex items-center gap-1.5 px-2 text-[11px] text-muted">
-      <span aria-hidden="true">📐</span>
-      <span className="truncate text-ink">{state.name || "workbench"}</span>
-      <button
-        type="button"
-        onClick={onToggle}
-        className="ml-auto rounded-full border border-[var(--line)] px-2 py-[1px] text-[10px] uppercase tracking-wider transition hover:border-[var(--muted)]"
-        style={{
-          color: active ? "var(--accent2)" : "var(--muted)",
-          borderColor: active ? "var(--accent2)" : "var(--line)",
-        }}
-        title={
-          active
-            ? "Including this design as context in chat. Click to ignore."
-            : "Click to use this design as chat context."
-        }
-      >
-        {active ? "in context" : "not used"}
-      </button>
-    </div>
-  );
-}
-
-export function ChatPill() {
+  /**
+   * When true, any tool result carrying an `ork_b64` is broadcast onto the
+   * workbench channel immediately — no "Apply to Workbench" click needed.
+   * The /workspace overlay sets this so chat edits flow straight into the
+   * open workbench tab.
+   */
+  autoApplyDesigns?: boolean;
+} = {}) {
   const [q, setQ] = useState("");
   const [me, setMe] = useState<Me>(null);
   const [loading, setLoading] = useState(true);
@@ -163,8 +149,7 @@ export function ChatPill() {
   const [dragY, setDragY] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [panelHeight, setPanelHeight] = useState(350);
-  const [useContext, setUseContext] = useState(true);
-  const { state: workbenchState, loadDesign } = useWorkbench();
+  const { state: workbenchState, loadDesign, requestSimulate } = useWorkbench();
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const dragStartRef = useRef<{ y: number; height: number } | null>(null);
@@ -174,7 +159,7 @@ export function ChatPill() {
   const anchoredRef = useRef(true);
 
   const DEFAULT_PANEL_HEIGHT = 350;
-  const MIN_PANEL_HEIGHT = 220;
+  const MIN_PANEL_HEIGHT = 280;
   const CLOSE_THRESHOLD = 60;
 
   const maxPanelHeight = () =>
@@ -190,6 +175,19 @@ export function ChatPill() {
     inputRef.current?.blur();
   };
 
+  const newChat = () => {
+    setMessages([]);
+    setPending(false);
+    setQ("");
+    setDismissed(false);
+    setDragY(0);
+    setDragging(false);
+    setPanelHeight(DEFAULT_PANEL_HEIGHT);
+    dragStartRef.current = null;
+    anchoredRef.current = true;
+    setAccountOpen(false);
+  };
+
   const onHandleDown = (e: React.PointerEvent<HTMLDivElement>) => {
     dragStartRef.current = { y: e.clientY, height: panelHeight };
     setDragging(true);
@@ -200,27 +198,34 @@ export function ChatPill() {
     const start = dragStartRef.current;
     if (!start) return;
     const dy = e.clientY - start.y;
-    if (dy >= 0) {
-      setDragY(dy);
-      if (panelHeight !== start.height) setPanelHeight(start.height);
+    if (dy < 0) {
+      // Upward: grow the panel up to viewport-ish; no translate.
+      setDragY(0);
+      setPanelHeight(Math.min(maxPanelHeight(), start.height - dy));
+    } else if (dy > 0) {
+      // Downward: first shrink any extra height down to MIN, then once the
+      // floor is hit, translate the panel (peel) so continuing the gesture
+      // past CLOSE_THRESHOLD dismisses it.
+      const targetHeight = Math.max(MIN_PANEL_HEIGHT, start.height - dy);
+      const consumed = start.height - targetHeight;
+      const overshoot = dy - consumed;
+      setPanelHeight(targetHeight);
+      setDragY(Math.max(0, overshoot));
     } else {
       setDragY(0);
-      const next = Math.min(
-        maxPanelHeight(),
-        Math.max(MIN_PANEL_HEIGHT, start.height - dy),
-      );
-      setPanelHeight(next);
+      setPanelHeight(start.height);
     }
   };
 
-  const onHandleUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    const start = dragStartRef.current;
-    const dy = start === null ? 0 : e.clientY - start.y;
+  const onHandleUp = () => {
     dragStartRef.current = null;
     setDragging(false);
-    if (dy > CLOSE_THRESHOLD) {
+    // Dismiss only if the peel (translateY) past the shrunken floor went
+    // past the threshold. Gross dy isn't the right signal — shrinking a
+    // tall panel back toward MIN doesn't count as a close intent.
+    if (dragY > CLOSE_THRESHOLD) {
       closeChat();
-    } else if (dy > 0) {
+    } else {
       setDragY(0);
     }
   };
@@ -267,6 +272,7 @@ export function ChatPill() {
   }, [accountOpen]);
 
   const canSend = q.trim().length > 0 && !pending && !loading;
+  const willDismiss = dragging && dragY > CLOSE_THRESHOLD;
   const chatOpen = (messages.length > 0 || pending) && !dismissed;
 
   const onSubmit = async (e: React.FormEvent) => {
@@ -361,7 +367,17 @@ export function ChatPill() {
         const id = ev.i;
         const r = ev.r;
         const e = ev.e;
+        const name = ev.n;
         const ork_b64 = (ev as { ork_b64?: string }).ork_b64;
+        let autoApplied = false;
+        if (autoApplyDesigns && ork_b64) {
+          autoApplied = loadDesign(ork_b64);
+        }
+        // After a chat-side simulate succeeds, ask the open workbench to
+        // run its own simulate so the FLIGHT chart updates.
+        if (autoApplyDesigns && !e && name === "simulate") {
+          requestSimulate();
+        }
         mutateLastAssistant((parts) =>
           parts.map((p) =>
             p.type === "tool" && p.event.id === id
@@ -373,6 +389,7 @@ export function ChatPill() {
                     result: r,
                     error: e,
                     ork_b64,
+                    autoApplied,
                   },
                 }
               : p,
@@ -387,7 +404,7 @@ export function ChatPill() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           messages: history,
-          ...(useContext && workbenchState
+          ...(workbenchState
             ? {
                 context: {
                   ork_b64: workbenchState.ork_b64,
@@ -448,19 +465,57 @@ export function ChatPill() {
             className="absolute overflow-hidden rounded-[28px]"
             style={{
               background: "var(--bg-2)",
-              border: "1px solid rgba(232,237,247,0.18)",
-              boxShadow:
-                "0 0 0 3px rgba(255,45,120,0.06), 0 18px 48px rgba(255,45,120,0.12)",
+              border: willDismiss
+                ? "1px solid rgba(232,237,247,0.55)"
+                : "1px solid rgba(232,237,247,0.18)",
+              boxShadow: willDismiss
+                ? "0 0 0 4px rgba(232,237,247,0.14), 0 24px 56px rgba(0,0,0,0.45)"
+                : "0 0 0 3px rgba(255,45,120,0.06), 0 18px 48px rgba(255,45,120,0.12)",
               top: -(panelHeight + 5),
               bottom: -5,
               left: -5,
               right: -5,
               transform: `translateY(${dragY}px)`,
               transition: dragging
-                ? "none"
-                : "transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1), top 180ms ease",
+                ? "border-color 60ms ease-out, box-shadow 60ms ease-out"
+                : "transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1), top 180ms ease, border-color 180ms ease, box-shadow 180ms ease",
             }}
           >
+            {/* Dismiss-zone overlay: frosted hint that releasing here will
+                close the chat. Pointer-events disabled so the in-flight
+                drag keeps going. */}
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 flex items-center justify-center"
+              style={{
+                background: "rgba(10,14,26,0.55)",
+                backdropFilter: "blur(8px)",
+                WebkitBackdropFilter: "blur(8px)",
+                opacity: willDismiss ? 1 : 0,
+                transition: willDismiss
+                  ? "opacity 60ms ease-out"
+                  : "opacity 140ms ease",
+              }}
+            >
+              <div className="flex flex-col items-center gap-2 text-ink">
+                <svg
+                  width="32"
+                  height="32"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <polyline points="6 9 12 15 18 9" />
+                  <polyline points="6 15 12 21 18 15" />
+                </svg>
+                <span className="mono text-[11px] uppercase tracking-[0.2em]">
+                  Release to dismiss
+                </span>
+              </div>
+            </div>
             <div
               role="button"
               aria-label="Close chat (drag down or click)"
@@ -479,7 +534,7 @@ export function ChatPill() {
             <div
               ref={scrollRef}
               onScroll={onScroll}
-              className="space-y-2 overflow-y-auto px-3 pb-3"
+              className="space-y-2 overflow-y-auto overscroll-contain px-3 pb-3"
               style={{
                 height: panelHeight - 20,
                 transition: dragging ? "none" : "height 180ms ease",
@@ -584,6 +639,28 @@ export function ChatPill() {
                       boxShadow: "0 18px 48px rgba(0,0,0,0.45)",
                     }}
                   >
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={newChat}
+                      className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-ink hover:bg-[var(--panel)]"
+                    >
+                      <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        aria-hidden="true"
+                      >
+                        <path d="M12 20h9" />
+                        <path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4 12.5-12.5z" />
+                      </svg>
+                      <span>New chat</span>
+                    </button>
                     {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
                     <a
                       href="/api/auth/logout"
@@ -687,13 +764,6 @@ export function ChatPill() {
         </form>
       </div>
 
-      {workbenchState && (
-        <WorkbenchBadge
-          state={workbenchState}
-          active={useContext}
-          onToggle={() => setUseContext((v) => !v)}
-        />
-      )}
     </div>
   );
 }

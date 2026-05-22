@@ -140,6 +140,19 @@ function Workbenchful() {
   const onNewDoc = () => run(() => newDoc(), onLoaded);
   const onOpenFile = (f: File) => run(() => openOrkFile(f), onLoaded);
 
+  // Bridge-triggered simulate: chat calls its simulate tool → it asks the
+  // workbench to run its own simulate against the currently-loaded design,
+  // so the FLIGHT chart populates without the user clicking the button.
+  const bridgeSimulate = () => {
+    const w = wbRef.current;
+    if (!w) return;
+    const simName = w.view.simulations[0] ?? "";
+    run(
+      () => runSim(simName || null),
+      (d) => setFd(d),
+    );
+  };
+
   // Workbench bridge.
   //
   //   - On boot, look at our own URL (?ork_b64= / ?example= / ?path=) and
@@ -170,6 +183,8 @@ function Workbenchful() {
         if (typeof m.b64 === "string") loadB64(m.b64);
         else if (typeof m.example === "string") loadPath(`/orks/${m.example}`);
         else if (typeof m.path === "string") loadPath(m.path);
+      } else if (m.type === "workbench:run_simulate") {
+        bridgeSimulate();
       }
     };
     window.addEventListener("message", onParentMsg);
@@ -202,6 +217,8 @@ function Workbenchful() {
             .catch(() => {});
         } else if (m.type === "load_design" && typeof m.b64 === "string") {
           loadB64(m.b64);
+        } else if (m.type === "run_simulate") {
+          bridgeSimulate();
         }
       };
       chan.addEventListener("message", onChanMsg);

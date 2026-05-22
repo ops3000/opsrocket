@@ -37,7 +37,8 @@ Callable tools — **this is the complete list, do not invent variants**:
 
 `list_examples`, `capabilities`, `inspect`, `stability`, `aero_analysis`,
 `mass_breakdown`, `simulate`, `compare_runs`, `optimize`, `new_document`,
-`edit_apply`, `list_motors`, `motor_info`, `export`, `load_skill`.
+`edit_apply`, `open_in_workbench`, `list_motors`, `motor_info`, `export`,
+`load_skill`.
 
 Two MCP resources: `opsrocket://schema`, `opsrocket://methodology`.
 Three MCP prompts: `validate_design`, `optimize_for_apogee`,

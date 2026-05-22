@@ -210,14 +210,45 @@ fn render_common(
         "<axialoffset method=\"{}\">{}</axialoffset>\n",
         method_str, common.axial_offset
     ));
+    if !matches!(common.angle_offset, x if x == 0.0) {
+        push_text(out, depth, "angleoffset", &common.angle_offset.to_degrees().to_string());
+    }
     if let Some(m) = &common.material {
         render_material(out, depth, "material", m);
     }
+    push_text(out, depth, "finish", finish_str(common.finish));
     if let Some(v) = common.mass_override {
         push_text(out, depth, "overridemass", &v.to_string());
     }
+    if common.override_subcomponents_mass {
+        push_text(out, depth, "overridesubcomponentsmass", "true");
+    }
     if let Some(v) = common.cg_override {
         push_text(out, depth, "overridecg", &v.to_string());
+    }
+    if let Some(v) = common.cd_override {
+        push_text(out, depth, "overridecd", &v.to_string());
+    }
+    if common.override_subcomponents_cd {
+        push_text(out, depth, "overridesubcomponentscd", "true");
+    }
+    if !common.comment.is_empty() {
+        push_text(out, depth, "comment", &common.comment);
+    }
+}
+
+fn finish_str(f: opsrocket_core::component::Finish) -> &'static str {
+    use opsrocket_core::component::Finish;
+    match f {
+        Finish::Rough => "rough",
+        Finish::RoughUnfinished => "roughunfinished",
+        Finish::Unfinished => "unfinished",
+        Finish::Normal => "normal",
+        Finish::Smooth => "smooth",
+        Finish::Optimum => "optimum",
+        Finish::Polished => "polished",
+        Finish::FinishPolished => "finishpolished",
+        Finish::Mirror => "mirror",
     }
 }
 
@@ -319,6 +350,21 @@ fn render_transition(out: &mut String, d: usize, t: &opsrocket_core::component::
         push_text(out, d, "thickness", "filled");
     } else {
         push_text(out, d, "thickness", &t.thickness.to_string());
+    }
+    if t.clipped {
+        push_text(out, d, "clipped", "true");
+    }
+    if t.fore_shoulder_length > 0.0 {
+        push_text(out, d, "foreshoulderradius", &t.fore_shoulder_radius.to_string());
+        push_text(out, d, "foreshoulderlength", &t.fore_shoulder_length.to_string());
+        push_text(out, d, "foreshoulderthickness", &t.fore_shoulder_thickness.to_string());
+        push_text(out, d, "foreshouldercapped", if t.fore_shoulder_capped { "true" } else { "false" });
+    }
+    if t.aft_shoulder_length > 0.0 {
+        push_text(out, d, "aftshoulderradius", &t.aft_shoulder_radius.to_string());
+        push_text(out, d, "aftshoulderlength", &t.aft_shoulder_length.to_string());
+        push_text(out, d, "aftshoulderthickness", &t.aft_shoulder_thickness.to_string());
+        push_text(out, d, "aftshouldercapped", if t.aft_shoulder_capped { "true" } else { "false" });
     }
     render_subcomponents(out, d, &t.children);
 }

@@ -396,6 +396,20 @@ pub fn mcp_mass_breakdown(bytes: &[u8]) -> Result<String, JsError> {
     let doc = doc_from(bytes)?;
     let props = opsrocket_sim::mass::empty_mass_properties(&doc.rocket);
     let stab = opsrocket_view::stability(&doc);
+    // Per-component mass walk so chat / GUI can show "Component mass: 15.4 g"
+    // alongside the assembly total. Walks the same structural tree the
+    // aggregate uses.
+    let mut per_component: Vec<serde_json::Value> = Vec::new();
+    let resolved = opsrocket_sim::mass::resolve_auto_dimensions(&doc.rocket);
+    for (c, _) in opsrocket_sim::mass::iter_layout(&resolved) {
+        let common = c.common();
+        per_component.push(json!({
+            "id": common.id.0,
+            "name": common.name,
+            "kind": opsrocket_view::schema::kind_of(c),
+            "mass_g": opsrocket_sim::mass::single_component_mass(c) * 1000.0,
+        }));
+    }
     ok_json(json!({
         "engine_version": ENGINE_VERSION,
         "mass_kg": props.mass,
@@ -403,7 +417,76 @@ pub fn mcp_mass_breakdown(bytes: &[u8]) -> Result<String, JsError> {
         "i_long": props.i_long,
         "i_rot": props.i_rot,
         "stability": stab,
+        "per_component": per_component,
     }))
+}
+
+#[wasm_bindgen]
+pub fn mcp_list_presets(filter_json: &str) -> Result<String, JsError> {
+    let p: Value = if filter_json.trim().is_empty() {
+        json!({})
+    } else {
+        parse(filter_json)?
+    };
+    let kind = p.get("kind").and_then(Value::as_str).and_then(|k| {
+        match k {
+            "body_tube" => Some(opsrocket_core::preset::PresetKind::BodyTube),
+            "nose_cone" => Some(opsrocket_core::preset::PresetKind::NoseCone),
+            "transition" => Some(opsrocket_core::preset::PresetKind::Transition),
+            "inner_tube" => Some(opsrocket_core::preset::PresetKind::InnerTube),
+            "centering_ring" => Some(opsrocket_core::preset::PresetKind::CenteringRing),
+            _ => None,
+        }
+    });
+    let manufacturer = p.get("manufacturer").and_then(Value::as_str);
+    let body_od_mm = p.get("body_od_mm").and_then(Value::as_f64);
+    let contains = p.get("contains").and_then(Value::as_str);
+    let hits = opsrocket_core::preset::Preset::filter(kind, manufacturer, body_od_mm, contains);
+    ok_json(json!({
+        "engine_version": ENGINE_VERSION,
+        "count": hits.len(),
+        "presets": hits,
+    }))
+}
+
+#[wasm_bindgen]
+pub fn mcp_list_materials() -> Result<String, JsError> {
+    let items: Vec<serde_json::Value> = opsrocket_core::material::CATALOG
+        .iter()
+        .map(|m| {
+            json!({
+                "name": m.name,
+                "kind": match m.kind {
+                    opsrocket_core::material::MaterialType::Bulk => "bulk",
+                    opsrocket_core::material::MaterialType::Surface => "surface",
+                    opsrocket_core::material::MaterialType::Line => "line",
+                },
+                "density": m.density,
+                "group": m.group,
+            })
+        })
+        .collect();
+    ok_json(json!({
+        "engine_version": ENGINE_VERSION,
+        "materials": items,
+    }))
+}
+
+#[wasm_bindgen]
+pub fn mcp_component_mass(bytes: &[u8], comp_id: &str) -> Result<String, JsError> {
+    let doc = doc_from(bytes)?;
+    let resolved = opsrocket_sim::mass::resolve_auto_dimensions(&doc.rocket);
+    for (c, _) in opsrocket_sim::mass::iter_layout(&resolved) {
+        if c.common().id.0 == comp_id {
+            return ok_json(json!({
+                "id": c.common().id.0,
+                "name": c.common().name,
+                "kind": opsrocket_view::schema::kind_of(c),
+                "mass_g": opsrocket_sim::mass::single_component_mass(c) * 1000.0,
+            }));
+        }
+    }
+    Err(JsError::new(&format!("component {comp_id} not found")))
 }
 
 #[wasm_bindgen]
@@ -559,6 +642,23 @@ pub fn mcp_edit_apply(bytes: &[u8], ops_json: &str) -> Result<Vec<u8>, JsError> 
                 s(op, "event")?,
                 op.get("delay").and_then(Value::as_f64).unwrap_or(0.0),
             ),
+            "apply_preset" => (|| -> Result<(), String> {
+                let preset_id = op
+                    .get("preset_id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "missing preset_id".to_string())?;
+                let comp_id = op
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "missing id".to_string())?;
+                let preset = opsrocket_core::preset::Preset::lookup(preset_id)
+                    .ok_or_else(|| format!("unknown preset {preset_id}"))?;
+                opsrocket_view::schema::apply_preset(
+                    &mut doc.rocket,
+                    comp_id,
+                    preset,
+                )
+            })(),
             other => Err(format!("unknown op '{other}'")),
         };
         r.map_err(|e| jerr(format!("op[{i}] ({kind}): {e}")))?;

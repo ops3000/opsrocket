@@ -665,7 +665,7 @@ fn add_transition(
     t: &opsrocket_core::component::Transition,
     axial_start: f64,
 ) {
-    let (computed_mass, computed_cg) = if let Some(mat) = t.common.material.as_ref() {
+    let (shell_mass, shell_cg) = if let Some(mat) = t.common.material.as_ref() {
         // Exact OpenRocket hollow-shell integration (frustum-difference).
         let (vol, cg) = opsrocket_core::profile::shell_volume_cg(
             t.shape,
@@ -680,7 +680,34 @@ fn add_transition(
     } else {
         (0.0, axial_start + 0.5 * t.length)
     };
-    let mass = override_mass(&t.common, computed_mass);
+
+    // Fore + aft shoulders (each contributes wall + optional cap mass).
+    let (fore_mass, fore_cg) = transition_shoulder_mass(
+        &t.common,
+        t.fore_shoulder_radius,
+        t.fore_shoulder_length,
+        t.fore_shoulder_thickness,
+        t.fore_shoulder_capped,
+        // Fore shoulder protrudes UPSTREAM from the transition's fore face.
+        axial_start - 0.5 * t.fore_shoulder_length,
+    );
+    let (aft_mass, aft_cg) = transition_shoulder_mass(
+        &t.common,
+        t.aft_shoulder_radius,
+        t.aft_shoulder_length,
+        t.aft_shoulder_thickness,
+        t.aft_shoulder_capped,
+        // Aft shoulder protrudes DOWNSTREAM from the transition's aft face.
+        axial_start + t.length + 0.5 * t.aft_shoulder_length,
+    );
+
+    let total_computed = shell_mass + fore_mass + aft_mass;
+    let mass = override_mass(&t.common, total_computed);
+    let computed_cg = if total_computed > 0.0 {
+        (shell_mass * shell_cg + fore_mass * fore_cg + aft_mass * aft_cg) / total_computed
+    } else {
+        axial_start + 0.5 * t.length
+    };
     let cg = override_cg(&t.common, computed_cg);
     let (rot_u, long_u) = opsrocket_core::profile::shell_unit_inertia(
         t.shape,
@@ -691,7 +718,39 @@ fn add_transition(
         t.thickness,
         t.filled,
     );
+    // Shoulder inertia contribution is small and rarely material-faithful in
+    // OpenRocket either; leave the shell's tensor as the dominant term.
     acc.add(mass, cg, mass * rot_u, mass * long_u);
+}
+
+/// Wall + optional cap mass for a transition shoulder. Returns (mass, cg) in
+/// world axial coordinates given the shoulder's midpoint as `axial_mid`.
+fn transition_shoulder_mass(
+    common: &opsrocket_core::component::Common,
+    r_outer: f64,
+    length: f64,
+    thickness: f64,
+    capped: bool,
+    axial_mid: f64,
+) -> (f64, f64) {
+    if length <= 0.0 || r_outer <= 0.0 {
+        return (0.0, 0.0);
+    }
+    let mat = match common.material.as_ref() {
+        Some(m) => m,
+        None => return (0.0, 0.0),
+    };
+    if !matches!(mat.kind, MaterialType::Bulk) {
+        return (0.0, 0.0);
+    }
+    let r_inner = (r_outer - thickness).max(0.0);
+    let wall_vol = PI * (r_outer * r_outer - r_inner * r_inner) * length;
+    let mut mass = wall_vol * mat.density;
+    if capped {
+        let cap_vol = PI * r_inner * r_inner * thickness;
+        mass += cap_vol * mat.density;
+    }
+    (mass, axial_mid)
 }
 
 fn add_innertube(acc: &mut Accumulator, it: &opsrocket_core::component::InnerTube, axial_start: f64) {

@@ -84,6 +84,15 @@
           return J(w.session_redo());
         case "motors":
           return J(w.session_motors());
+        case "list_materials":
+          return J(w.mcp_list_materials());
+        case "list_presets":
+          return J(w.mcp_list_presets(JSON.stringify(body || {})));
+        case "component_mass": {
+          // body.id = component id; takes the current session's bytes.
+          const bytes = w.session_save();
+          return J(w.mcp_component_mass(bytes, body.id));
+        }
         case "assign_motor":
           return J(w.session_assign_motor(JSON.stringify(body)));
         case "clear_motor":

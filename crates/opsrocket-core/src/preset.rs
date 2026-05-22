@@ -1,0 +1,642 @@
+//! Component preset library — a curated subset of OpenRocket's
+//! `core/resources/datafiles/presets/*.orc` catalogs.
+//!
+//! Each entry is a manufacturer + part number with the dimensions and
+//! material density needed to materialize a real `BodyTube`, `NoseCone`,
+//! `InnerTube`, or `CenteringRing`. The chat / GUI applies a preset by
+//! looking the entry up here and copying its dimensions onto an existing
+//! component (or instantiating a new one) — exactly what OpenRocket's
+//! "Components" picker does in its dialog.
+//!
+//! This is intentionally a curated starter set, not the full OpenRocket
+//! catalog (which is ~hundreds of items across many .orc files). It covers
+//! the most common low-/mid-power body tubes, nose cones, and motor mount
+//! tubes; extend the `PRESETS` slice with more entries as needed.
+
+use serde::Serialize;
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PresetKind {
+    BodyTube,
+    NoseCone,
+    Transition,
+    InnerTube,
+    CenteringRing,
+}
+
+/// Nose-cone shape names that match `core::component::NoseShape` rename.
+pub const NOSE_CONICAL: &str = "conical";
+pub const NOSE_OGIVE: &str = "ogive";
+pub const NOSE_ELLIPSOID: &str = "ellipsoid";
+pub const NOSE_PARABOLIC: &str = "parabolic";
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct Preset {
+    /// Stable id, e.g. "estes-bt-50".
+    pub id: &'static str,
+    pub manufacturer: &'static str,
+    pub part_no: &'static str,
+    pub kind: PresetKind,
+    pub description: &'static str,
+    /// Outer diameter (mm). For Transition, the fore diameter; aft uses `od2`.
+    pub od_mm: f64,
+    /// Aft outer diameter for transitions (mm). 0 ⇒ unused.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub od2_mm: f64,
+    /// Inner diameter (mm). For body / inner tubes, the bore; for nose cones,
+    /// the shoulder ID. 0 ⇒ solid / unused.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub id_mm: f64,
+    /// Length (mm).
+    pub length_mm: f64,
+    /// For nose cones: shoulder length (mm). 0 ⇒ no shoulder.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub shoulder_length_mm: f64,
+    /// For nose cones: which profile (use NOSE_* constants).
+    #[serde(skip_serializing_if = "str::is_empty")]
+    pub shape: &'static str,
+    /// Material name that resolves against `material::CATALOG`.
+    pub material: &'static str,
+    /// Mass in grams (datasheet value, used as a fall-back / override hint).
+    /// 0 ⇒ derive from geometry × material density.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub mass_g: f64,
+}
+
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
+}
+
+/// Curated preset slice. ~40 entries covering common Estes / Apogee / LOC
+/// body tubes, nose cones, and motor-mount tubes. All dimensions are in mm.
+/// (Real OpenRocket catalog has hundreds of these.)
+pub const PRESETS: &[Preset] = &[
+    // ── Estes body tubes (`BT-*` numbers; Cardboard, 0.5 mm wall typical) ──
+    Preset {
+        id: "estes-bt-5",
+        manufacturer: "Estes",
+        part_no: "BT-5",
+        kind: PresetKind::BodyTube,
+        description: "Estes BT-5 (13 mm body tube; T mount)",
+        od_mm: 13.8,
+        od2_mm: 0.0,
+        id_mm: 13.2,
+        length_mm: 305.0,
+        shoulder_length_mm: 0.0,
+        shape: "",
+        material: "Cardboard",
+        mass_g: 0.0,
+    },
+    Preset {
+        id: "estes-bt-20",
+        manufacturer: "Estes",
+        part_no: "BT-20",
+        kind: PresetKind::BodyTube,
+        description: "Estes BT-20 (18 mm; standard mini/sm motor mount tube)",
+        od_mm: 18.7,
+        od2_mm: 0.0,
+        id_mm: 18.0,
+        length_mm: 305.0,
+        shoulder_length_mm: 0.0,
+        shape: "",
+        material: "Cardboard",
+        mass_g: 0.0,
+    },
+    Preset {
+        id: "estes-bt-50",
+        manufacturer: "Estes",
+        part_no: "BT-50",
+        kind: PresetKind::BodyTube,
+        description: "Estes BT-50 (24 mm body / motor tube)",
+        od_mm: 24.8,
+        od2_mm: 0.0,
+        id_mm: 24.1,
+        length_mm: 305.0,
+        shoulder_length_mm: 0.0,
+        shape: "",
+        material: "Cardboard",
+        mass_g: 0.0,
+    },
+    Preset {
+        id: "estes-bt-55",
+        manufacturer: "Estes",
+        part_no: "BT-55",
+        kind: PresetKind::BodyTube,
+        description: "Estes BT-55 (33 mm)",
+        od_mm: 33.4,
+        od2_mm: 0.0,
+        id_mm: 32.6,
+        length_mm: 305.0,
+        shoulder_length_mm: 0.0,
+        shape: "",
+        material: "Cardboard",
+        mass_g: 0.0,
+    },
+    Preset {
+        id: "estes-bt-56",
+        manufacturer: "Estes",
+        part_no: "BT-56",
+        kind: PresetKind::BodyTube,
+        description: "Estes BT-56 (35 mm)",
+        od_mm: 35.3,
+        od2_mm: 0.0,
+        id_mm: 34.7,
+        length_mm: 305.0,
+        shoulder_length_mm: 0.0,
+        shape: "",
+        material: "Cardboard",
+        mass_g: 0.0,
+    },
+    Preset {
+        id: "estes-bt-60",
+        manufacturer: "Estes",
+        part_no: "BT-60",
+        kind: PresetKind::BodyTube,
+        description: "Estes BT-60 (41 mm; classic mid-power tube)",
+        od_mm: 41.6,
+        od2_mm: 0.0,
+        id_mm: 40.8,
+        length_mm: 305.0,
+        shoulder_length_mm: 0.0,
+        shape: "",
+        material: "Cardboard",
+        mass_g: 0.0,
+    },
+    Preset {
+        id: "estes-bt-70",
+        manufacturer: "Estes",
+        part_no: "BT-70",
+        kind: PresetKind::BodyTube,
+        description: "Estes BT-70 (56 mm)",
+        od_mm: 55.7,
+        od2_mm: 0.0,
+        id_mm: 54.8,
+        length_mm: 305.0,
+        shoulder_length_mm: 0.0,
+        shape: "",
+        material: "Cardboard",
+        mass_g: 0.0,
+    },
+    Preset {
+        id: "estes-bt-80",
+        manufacturer: "Estes",
+        part_no: "BT-80",
+        kind: PresetKind::BodyTube,
+        description: "Estes BT-80 (66 mm)",
+        od_mm: 66.0,
+        od2_mm: 0.0,
+        id_mm: 64.9,
+        length_mm: 305.0,
+        shoulder_length_mm: 0.0,
+        shape: "",
+        material: "Cardboard",
+        mass_g: 0.0,
+    },
+    Preset {
+        id: "estes-bt-101",
+        manufacturer: "Estes",
+        part_no: "BT-101",
+        kind: PresetKind::BodyTube,
+        description: "Estes BT-101 (101 mm; ~4 in body)",
+        od_mm: 101.6,
+        od2_mm: 0.0,
+        id_mm: 100.0,
+        length_mm: 460.0,
+        shoulder_length_mm: 0.0,
+        shape: "",
+        material: "Cardboard",
+        mass_g: 0.0,
+    },
+    // ── Estes nose cones (PNC-*) ───────────────────────────────────────────
+    Preset {
+        id: "estes-pnc-20",
+        manufacturer: "Estes",
+        part_no: "PNC-20",
+        kind: PresetKind::NoseCone,
+        description: "Estes PNC-20 ogive (BT-20 base, polystyrene)",
+        od_mm: 18.0,
+        od2_mm: 0.0,
+        id_mm: 17.5,
+        length_mm: 36.0,
+        shoulder_length_mm: 14.0,
+        shape: NOSE_OGIVE,
+        material: "Polystyrene",
+        mass_g: 0.0,
+    },
+    Preset {
+        id: "estes-pnc-50k",
+        manufacturer: "Estes",
+        part_no: "PNC-50K",
+        kind: PresetKind::NoseCone,
+        description: "Estes PNC-50K ogive (BT-50)",
+        od_mm: 24.1,
+        od2_mm: 0.0,
+        id_mm: 23.6,
+        length_mm: 70.0,
+        shoulder_length_mm: 18.0,
+        shape: NOSE_OGIVE,
+        material: "Polystyrene",
+        mass_g: 0.0,
+    },
+    Preset {
+        id: "estes-pnc-55",
+        manufacturer: "Estes",
+        part_no: "PNC-55",
+        kind: PresetKind::NoseCone,
+        description: "Estes PNC-55 ogive (BT-55)",
+        od_mm: 32.6,
+        od2_mm: 0.0,
+        id_mm: 32.2,
+        length_mm: 85.0,
+        shoulder_length_mm: 22.0,
+        shape: NOSE_OGIVE,
+        material: "Polystyrene",
+        mass_g: 0.0,
+    },
+    Preset {
+        id: "estes-pnc-60ah",
+        manufacturer: "Estes",
+        part_no: "PNC-60AH",
+        kind: PresetKind::NoseCone,
+        description: "Estes PNC-60AH conical (BT-60)",
+        od_mm: 40.8,
+        od2_mm: 0.0,
+        id_mm: 40.4,
+        length_mm: 70.0,
+        shoulder_length_mm: 22.0,
+        shape: NOSE_CONICAL,
+        material: "Polystyrene",
+        mass_g: 0.0,
+    },
+    Preset {
+        id: "estes-pnc-70ay",
+        manufacturer: "Estes",
+        part_no: "PNC-70AY",
+        kind: PresetKind::NoseCone,
+        description: "Estes PNC-70AY ogive (BT-70)",
+        od_mm: 54.8,
+        od2_mm: 0.0,
+        id_mm: 54.4,
+        length_mm: 110.0,
+        shoulder_length_mm: 24.0,
+        shape: NOSE_OGIVE,
+        material: "Polystyrene",
+        mass_g: 0.0,
+    },
+    Preset {
+        id: "estes-pnc-80",
+        manufacturer: "Estes",
+        part_no: "PNC-80",
+        kind: PresetKind::NoseCone,
+        description: "Estes PNC-80 ogive (BT-80)",
+        od_mm: 64.9,
+        od2_mm: 0.0,
+        id_mm: 64.5,
+        length_mm: 130.0,
+        shoulder_length_mm: 26.0,
+        shape: NOSE_OGIVE,
+        material: "Polystyrene",
+        mass_g: 0.0,
+    },
+    // ── Motor mount tubes (Estes) ──────────────────────────────────────────
+    Preset {
+        id: "estes-mmt-13",
+        manufacturer: "Estes",
+        part_no: "T-tube 13mm",
+        kind: PresetKind::InnerTube,
+        description: "Estes 13 mm T-class motor mount tube",
+        od_mm: 13.8,
+        od2_mm: 0.0,
+        id_mm: 13.2,
+        length_mm: 70.0,
+        shoulder_length_mm: 0.0,
+        shape: "",
+        material: "Cardboard",
+        mass_g: 0.0,
+    },
+    Preset {
+        id: "estes-mmt-18",
+        manufacturer: "Estes",
+        part_no: "18mm mount",
+        kind: PresetKind::InnerTube,
+        description: "Estes 18 mm mini/small motor mount tube (A-C)",
+        od_mm: 18.7,
+        od2_mm: 0.0,
+        id_mm: 18.0,
+        length_mm: 70.0,
+        shoulder_length_mm: 0.0,
+        shape: "",
+        material: "Cardboard",
+        mass_g: 0.0,
+    },
+    Preset {
+        id: "estes-mmt-24",
+        manufacturer: "Estes",
+        part_no: "24mm mount",
+        kind: PresetKind::InnerTube,
+        description: "Estes 24 mm D-E motor mount tube",
+        od_mm: 24.8,
+        od2_mm: 0.0,
+        id_mm: 24.1,
+        length_mm: 70.0,
+        shoulder_length_mm: 0.0,
+        shape: "",
+        material: "Cardboard",
+        mass_g: 0.0,
+    },
+    Preset {
+        id: "aerotech-mmt-29",
+        manufacturer: "AeroTech",
+        part_no: "29mm mount",
+        kind: PresetKind::InnerTube,
+        description: "AeroTech 29 mm motor mount tube (E-G hobby reload)",
+        od_mm: 29.5,
+        od2_mm: 0.0,
+        id_mm: 29.0,
+        length_mm: 152.0,
+        shoulder_length_mm: 0.0,
+        shape: "",
+        material: "Cardboard",
+        mass_g: 0.0,
+    },
+    Preset {
+        id: "aerotech-mmt-38",
+        manufacturer: "AeroTech",
+        part_no: "38mm mount",
+        kind: PresetKind::InnerTube,
+        description: "AeroTech 38 mm motor mount tube",
+        od_mm: 38.5,
+        od2_mm: 0.0,
+        id_mm: 38.0,
+        length_mm: 254.0,
+        shoulder_length_mm: 0.0,
+        shape: "",
+        material: "Cardboard",
+        mass_g: 0.0,
+    },
+    Preset {
+        id: "aerotech-mmt-54",
+        manufacturer: "AeroTech",
+        part_no: "54mm mount",
+        kind: PresetKind::InnerTube,
+        description: "AeroTech 54 mm motor mount tube",
+        od_mm: 54.5,
+        od2_mm: 0.0,
+        id_mm: 54.0,
+        length_mm: 305.0,
+        shoulder_length_mm: 0.0,
+        shape: "",
+        material: "Cardboard",
+        mass_g: 0.0,
+    },
+    // ── LOC Precision phenolic tubes (PML/LOC sizing) ──────────────────────
+    Preset {
+        id: "loc-1.52",
+        manufacturer: "LOC Precision",
+        part_no: "LT-1.52",
+        kind: PresetKind::BodyTube,
+        description: "LOC Precision 1.52\" phenolic body tube",
+        od_mm: 38.6,
+        od2_mm: 0.0,
+        id_mm: 38.0,
+        length_mm: 864.0,
+        shoulder_length_mm: 0.0,
+        shape: "",
+        material: "Paper, hard",
+        mass_g: 0.0,
+    },
+    Preset {
+        id: "loc-2.14",
+        manufacturer: "LOC Precision",
+        part_no: "LT-2.14",
+        kind: PresetKind::BodyTube,
+        description: "LOC Precision 2.14\" phenolic body tube",
+        od_mm: 54.4,
+        od2_mm: 0.0,
+        id_mm: 53.7,
+        length_mm: 864.0,
+        shoulder_length_mm: 0.0,
+        shape: "",
+        material: "Paper, hard",
+        mass_g: 0.0,
+    },
+    Preset {
+        id: "loc-2.56",
+        manufacturer: "LOC Precision",
+        part_no: "LT-2.56",
+        kind: PresetKind::BodyTube,
+        description: "LOC Precision 2.56\" phenolic body tube",
+        od_mm: 65.0,
+        od2_mm: 0.0,
+        id_mm: 64.3,
+        length_mm: 864.0,
+        shoulder_length_mm: 0.0,
+        shape: "",
+        material: "Paper, hard",
+        mass_g: 0.0,
+    },
+    Preset {
+        id: "loc-3.0",
+        manufacturer: "LOC Precision",
+        part_no: "LT-3.0",
+        kind: PresetKind::BodyTube,
+        description: "LOC Precision 3.0\" phenolic body tube",
+        od_mm: 76.2,
+        od2_mm: 0.0,
+        id_mm: 75.6,
+        length_mm: 864.0,
+        shoulder_length_mm: 0.0,
+        shape: "",
+        material: "Paper, hard",
+        mass_g: 0.0,
+    },
+    Preset {
+        id: "loc-3.9",
+        manufacturer: "LOC Precision",
+        part_no: "LT-3.9",
+        kind: PresetKind::BodyTube,
+        description: "LOC Precision 3.9\" phenolic body tube",
+        od_mm: 99.5,
+        od2_mm: 0.0,
+        id_mm: 98.4,
+        length_mm: 864.0,
+        shoulder_length_mm: 0.0,
+        shape: "",
+        material: "Paper, hard",
+        mass_g: 0.0,
+    },
+    // ── Apogee nose cones (PNC-A-* numbers; common balsa cones) ────────────
+    Preset {
+        id: "apogee-pnc-29-ogive",
+        manufacturer: "Apogee",
+        part_no: "29 mm ogive",
+        kind: PresetKind::NoseCone,
+        description: "Apogee 29 mm balsa ogive nose cone",
+        od_mm: 29.0,
+        od2_mm: 0.0,
+        id_mm: 28.5,
+        length_mm: 87.0,
+        shoulder_length_mm: 22.0,
+        shape: NOSE_OGIVE,
+        material: "Balsa",
+        mass_g: 0.0,
+    },
+    Preset {
+        id: "apogee-pnc-38-vk",
+        manufacturer: "Apogee",
+        part_no: "38 mm Von-Karman",
+        kind: PresetKind::NoseCone,
+        description: "Apogee 38 mm Von-Karman (Haack series) nose cone",
+        od_mm: 38.0,
+        od2_mm: 0.0,
+        id_mm: 37.5,
+        length_mm: 152.0,
+        shoulder_length_mm: 25.0,
+        shape: "haack",
+        material: "Polystyrene",
+        mass_g: 0.0,
+    },
+    Preset {
+        id: "apogee-pnc-54-ogive",
+        manufacturer: "Apogee",
+        part_no: "54 mm ogive",
+        kind: PresetKind::NoseCone,
+        description: "Apogee 54 mm balsa ogive nose cone",
+        od_mm: 54.0,
+        od2_mm: 0.0,
+        id_mm: 53.5,
+        length_mm: 180.0,
+        shoulder_length_mm: 30.0,
+        shape: NOSE_OGIVE,
+        material: "Balsa",
+        mass_g: 0.0,
+    },
+    // ── Centering rings (a few standard pairings) ──────────────────────────
+    Preset {
+        id: "estes-cr-50-20",
+        manufacturer: "Estes",
+        part_no: "CR-50/20",
+        kind: PresetKind::CenteringRing,
+        description: "Centering ring: 24 mm motor mount into 24 mm BT-50",
+        od_mm: 24.1,
+        od2_mm: 0.0,
+        id_mm: 18.7,
+        length_mm: 3.0,
+        shoulder_length_mm: 0.0,
+        shape: "",
+        material: "Plywood (birch)",
+        mass_g: 0.0,
+    },
+    Preset {
+        id: "estes-cr-55-50",
+        manufacturer: "Estes",
+        part_no: "CR-55/50",
+        kind: PresetKind::CenteringRing,
+        description: "Centering ring: BT-50 motor tube into BT-55",
+        od_mm: 32.6,
+        od2_mm: 0.0,
+        id_mm: 24.8,
+        length_mm: 3.0,
+        shoulder_length_mm: 0.0,
+        shape: "",
+        material: "Plywood (birch)",
+        mass_g: 0.0,
+    },
+    Preset {
+        id: "estes-cr-60-50",
+        manufacturer: "Estes",
+        part_no: "CR-60/50",
+        kind: PresetKind::CenteringRing,
+        description: "Centering ring: BT-50 motor tube into BT-60",
+        od_mm: 40.8,
+        od2_mm: 0.0,
+        id_mm: 24.8,
+        length_mm: 3.0,
+        shoulder_length_mm: 0.0,
+        shape: "",
+        material: "Plywood (birch)",
+        mass_g: 0.0,
+    },
+    Preset {
+        id: "loc-cr-2.14-29",
+        manufacturer: "LOC Precision",
+        part_no: "CR-2.14/29",
+        kind: PresetKind::CenteringRing,
+        description: "Centering ring: 29 mm motor mount into 2.14\" tube",
+        od_mm: 53.7,
+        od2_mm: 0.0,
+        id_mm: 29.5,
+        length_mm: 6.0,
+        shoulder_length_mm: 0.0,
+        shape: "",
+        material: "Plywood (birch)",
+        mass_g: 0.0,
+    },
+    Preset {
+        id: "loc-cr-3.0-38",
+        manufacturer: "LOC Precision",
+        part_no: "CR-3.0/38",
+        kind: PresetKind::CenteringRing,
+        description: "Centering ring: 38 mm motor mount into 3.0\" tube",
+        od_mm: 75.6,
+        od2_mm: 0.0,
+        id_mm: 38.5,
+        length_mm: 6.0,
+        shoulder_length_mm: 0.0,
+        shape: "",
+        material: "Plywood (birch)",
+        mass_g: 0.0,
+    },
+    Preset {
+        id: "loc-cr-3.9-54",
+        manufacturer: "LOC Precision",
+        part_no: "CR-3.9/54",
+        kind: PresetKind::CenteringRing,
+        description: "Centering ring: 54 mm motor mount into 3.9\" tube",
+        od_mm: 98.4,
+        od2_mm: 0.0,
+        id_mm: 54.5,
+        length_mm: 6.0,
+        shoulder_length_mm: 0.0,
+        shape: "",
+        material: "Plywood (birch)",
+        mass_g: 0.0,
+    },
+];
+
+impl Preset {
+    pub fn lookup(id: &str) -> Option<&'static Preset> {
+        PRESETS.iter().find(|p| p.id.eq_ignore_ascii_case(id))
+    }
+
+    /// Filter by kind + optional manufacturer + optional body OD (mm,
+    /// ±tolerance). Useful for "give me a centering ring that fits this body".
+    pub fn filter(
+        kind: Option<PresetKind>,
+        manufacturer: Option<&str>,
+        body_od_mm: Option<f64>,
+        contains: Option<&str>,
+    ) -> Vec<&'static Preset> {
+        PRESETS
+            .iter()
+            .filter(|p| kind.map_or(true, |k| p.kind == k))
+            .filter(|p| {
+                manufacturer.map_or(true, |m| {
+                    p.manufacturer.to_lowercase().contains(&m.to_lowercase())
+                })
+            })
+            .filter(|p| {
+                body_od_mm.map_or(true, |target| (p.od_mm - target).abs() < 2.0)
+            })
+            .filter(|p| {
+                contains.map_or(true, |s| {
+                    let lower = s.to_lowercase();
+                    p.part_no.to_lowercase().contains(&lower)
+                        || p.description.to_lowercase().contains(&lower)
+                        || p.id.to_lowercase().contains(&lower)
+                })
+            })
+            .collect()
+    }
+}

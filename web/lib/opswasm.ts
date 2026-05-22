@@ -55,6 +55,9 @@ type Ops = {
   mcp_extract_or_reference(b: Uint8Array, index?: number): string;
   mcp_new_document(): Uint8Array;
   mcp_list_motors(): string;
+  mcp_list_materials(): string;
+  mcp_list_presets(filterJson: string): string;
+  mcp_component_mass(b: Uint8Array, compId: string): string;
   mcp_edit_apply(b: Uint8Array, opsJson: string): Uint8Array;
 };
 

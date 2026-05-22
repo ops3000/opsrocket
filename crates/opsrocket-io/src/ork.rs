@@ -469,6 +469,10 @@ fn parse_common_field(
             );
             Ok(true)
         }
+        b"comment" => {
+            common.comment = read_text(reader, b"comment")?;
+            Ok(true)
+        }
         _ => Ok(false),
     }
 }
@@ -724,6 +728,15 @@ fn parse_transition(reader: &mut Reader<&[u8]>) -> Result<Transition> {
         aft_radius: 0.0,
         thickness: 0.0,
         filled: false,
+        clipped: false,
+        fore_shoulder_radius: 0.0,
+        fore_shoulder_length: 0.0,
+        fore_shoulder_thickness: 0.0,
+        fore_shoulder_capped: false,
+        aft_shoulder_radius: 0.0,
+        aft_shoulder_length: 0.0,
+        aft_shoulder_thickness: 0.0,
+        aft_shoulder_capped: false,
         children: Vec::new(),
     };
     let mut buf = Vec::new();
@@ -760,6 +773,21 @@ fn parse_transition(reader: &mut Reader<&[u8]>) -> Result<Transition> {
                         }
                         b"filled" => {
                             tr.filled = read_text(reader, b"filled")? == "true";
+                        }
+                        b"clipped" => {
+                            tr.clipped = read_text(reader, b"clipped")? == "true";
+                        }
+                        b"foreshoulderradius" => tr.fore_shoulder_radius = parse_f64(reader, b"foreshoulderradius")?,
+                        b"foreshoulderlength" => tr.fore_shoulder_length = parse_f64(reader, b"foreshoulderlength")?,
+                        b"foreshoulderthickness" => tr.fore_shoulder_thickness = parse_f64(reader, b"foreshoulderthickness")?,
+                        b"foreshouldercapped" => {
+                            tr.fore_shoulder_capped = read_text(reader, b"foreshouldercapped")? == "true";
+                        }
+                        b"aftshoulderradius" => tr.aft_shoulder_radius = parse_f64(reader, b"aftshoulderradius")?,
+                        b"aftshoulderlength" => tr.aft_shoulder_length = parse_f64(reader, b"aftshoulderlength")?,
+                        b"aftshoulderthickness" => tr.aft_shoulder_thickness = parse_f64(reader, b"aftshoulderthickness")?,
+                        b"aftshouldercapped" => {
+                            tr.aft_shoulder_capped = read_text(reader, b"aftshouldercapped")? == "true";
                         }
                         b"subcomponents" => tr.children = parse_children(reader)?,
                         other => skip_to_end(reader, other)?,

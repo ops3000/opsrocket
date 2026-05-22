@@ -13,6 +13,7 @@
 //   * → workbench
 //     { type: "ping" }                                   — request a state replay
 //     { type: "load_design", b64: string }               — push this design into the open workbench
+//     { type: "run_simulate" }                           — workbench runs its current sim and shows the FLIGHT chart
 
 import { useEffect, useRef, useState } from "react";
 
@@ -28,6 +29,7 @@ const CHANNEL = "opsrocket-workbench";
 export function useWorkbench(): {
   state: WorkbenchState | null;
   loadDesign: (b64: string) => boolean; // returns false if no channel available
+  requestSimulate: () => boolean;
 } {
   const [state, setState] = useState<WorkbenchState | null>(null);
   const chanRef = useRef<BroadcastChannel | null>(null);
@@ -70,5 +72,12 @@ export function useWorkbench(): {
     return true;
   };
 
-  return { state, loadDesign };
+  const requestSimulate = (): boolean => {
+    const chan = chanRef.current;
+    if (!chan) return false;
+    chan.postMessage({ type: "run_simulate" });
+    return true;
+  };
+
+  return { state, loadDesign, requestSimulate };
 }

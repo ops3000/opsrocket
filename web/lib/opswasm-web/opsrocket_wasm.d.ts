@@ -5,6 +5,8 @@ export function mcp_analysis(bytes: Uint8Array, mach: number): string;
 
 export function mcp_capabilities(): string;
 
+export function mcp_component_mass(bytes: Uint8Array, comp_id: string): string;
+
 /**
  * Apply a list of edit ops and return the new .ork bytes. Stateless: the
  * caller threads the document through and can re-call mcp_inspect /
@@ -16,7 +18,11 @@ export function mcp_extract_or_reference(bytes: Uint8Array, index?: number | nul
 
 export function mcp_inspect(bytes: Uint8Array): string;
 
+export function mcp_list_materials(): string;
+
 export function mcp_list_motors(): string;
+
+export function mcp_list_presets(filter_json: string): string;
 
 export function mcp_mass_breakdown(bytes: Uint8Array): string;
 
@@ -85,10 +91,13 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly mcp_analysis: (a: number, b: number, c: number) => [number, number, number, number];
     readonly mcp_capabilities: () => [number, number, number, number];
+    readonly mcp_component_mass: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly mcp_edit_apply: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly mcp_extract_or_reference: (a: number, b: number, c: number) => [number, number, number, number];
     readonly mcp_inspect: (a: number, b: number) => [number, number, number, number];
+    readonly mcp_list_materials: () => [number, number, number, number];
     readonly mcp_list_motors: () => [number, number, number, number];
+    readonly mcp_list_presets: (a: number, b: number) => [number, number, number, number];
     readonly mcp_mass_breakdown: (a: number, b: number) => [number, number, number, number];
     readonly mcp_new_document: () => [number, number, number, number];
     readonly mcp_optimize: (a: number, b: number, c: number, d: number) => [number, number, number, number];

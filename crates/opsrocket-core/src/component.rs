@@ -119,6 +119,10 @@ pub struct Common {
     pub material: Option<Material>,
     #[serde(default)]
     pub appearance: Option<Appearance>,
+    /// Free-text comment (the OpenRocket dialog's "Comment" tab). Round-trips
+    /// through the .ork as `<comment>…</comment>`.
+    #[serde(default)]
+    pub comment: String,
 }
 
 impl Common {
@@ -137,6 +141,7 @@ impl Common {
             finish: Finish::Normal,
             material: None,
             appearance: None,
+            comment: String::new(),
         }
     }
 }
@@ -271,6 +276,28 @@ pub struct Transition {
     /// Solid (filled) vs hollow shell — `<filled>` in the .ork.
     #[serde(default)]
     pub filled: bool,
+    /// Whether the shape is "clipped" — see OpenRocket Transition.isClipped.
+    /// Currently informational; geometry uses the same shape integral.
+    #[serde(default)]
+    pub clipped: bool,
+    // Fore shoulder (fits inside the upstream body tube). Mirrors NoseCone.aft_shoulder_*.
+    #[serde(default)]
+    pub fore_shoulder_radius: f64,
+    #[serde(default)]
+    pub fore_shoulder_length: f64,
+    #[serde(default)]
+    pub fore_shoulder_thickness: f64,
+    #[serde(default)]
+    pub fore_shoulder_capped: bool,
+    // Aft shoulder (fits inside the downstream body tube).
+    #[serde(default)]
+    pub aft_shoulder_radius: f64,
+    #[serde(default)]
+    pub aft_shoulder_length: f64,
+    #[serde(default)]
+    pub aft_shoulder_thickness: f64,
+    #[serde(default)]
+    pub aft_shoulder_capped: bool,
     /// Nested components (couplers, mass, …) inside the transition.
     #[serde(default)]
     pub children: Vec<Component>,

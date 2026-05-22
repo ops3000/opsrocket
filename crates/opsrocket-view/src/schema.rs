@@ -26,6 +26,7 @@ pub enum FieldKind {
     Bool,
     Text,
     Enum,
+    Color, // "#RRGGBBAA" hex string
 }
 
 #[derive(Serialize, Clone)]
@@ -38,6 +39,10 @@ pub struct Field {
     pub options: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unit: Option<String>,
+    /// Logical section the gui groups this field under: "general", "shoulder",
+    /// "override", "appearance", "comment". None ⇒ renders ungrouped (legacy).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -59,25 +64,26 @@ fn f_len(key: &str, label: &str, v: f64) -> Field {
         value: json!(v * M2MM),
         options: None,
         unit: Some("mm".into()),
+        section: None,
     }
 }
 fn f_num(key: &str, label: &str, v: f64) -> Field {
-    Field { key: key.into(), label: label.into(), kind: FieldKind::Number, value: json!(v), options: None, unit: None }
+    Field { key: key.into(), label: label.into(), kind: FieldKind::Number, value: json!(v), options: None, unit: None, section: None }
 }
 fn f_mass(key: &str, label: &str, v: f64) -> Field {
-    Field { key: key.into(), label: label.into(), kind: FieldKind::Mass, value: json!(v * 1000.0), options: None, unit: Some("g".into()) }
+    Field { key: key.into(), label: label.into(), kind: FieldKind::Mass, value: json!(v * 1000.0), options: None, unit: Some("g".into()), section: None }
 }
 fn f_ang(key: &str, label: &str, rad: f64) -> Field {
-    Field { key: key.into(), label: label.into(), kind: FieldKind::Angle, value: json!(rad.to_degrees()), options: None, unit: Some("°".into()) }
+    Field { key: key.into(), label: label.into(), kind: FieldKind::Angle, value: json!(rad.to_degrees()), options: None, unit: Some("°".into()), section: None }
 }
 fn f_int(key: &str, label: &str, v: u32) -> Field {
-    Field { key: key.into(), label: label.into(), kind: FieldKind::Int, value: json!(v), options: None, unit: None }
+    Field { key: key.into(), label: label.into(), kind: FieldKind::Int, value: json!(v), options: None, unit: None, section: None }
 }
 fn f_bool(key: &str, label: &str, v: bool) -> Field {
-    Field { key: key.into(), label: label.into(), kind: FieldKind::Bool, value: json!(v), options: None, unit: None }
+    Field { key: key.into(), label: label.into(), kind: FieldKind::Bool, value: json!(v), options: None, unit: None, section: None }
 }
 fn f_text(key: &str, label: &str, v: &str) -> Field {
-    Field { key: key.into(), label: label.into(), kind: FieldKind::Text, value: json!(v), options: None, unit: None }
+    Field { key: key.into(), label: label.into(), kind: FieldKind::Text, value: json!(v), options: None, unit: None, section: None }
 }
 fn f_enum(key: &str, label: &str, v: &str, opts: &[&str]) -> Field {
     Field {
@@ -87,11 +93,88 @@ fn f_enum(key: &str, label: &str, v: &str, opts: &[&str]) -> Field {
         value: json!(v),
         options: Some(opts.iter().map(|s| s.to_string()).collect()),
         unit: None,
+        section: None,
     }
 }
 fn f_opt_len(key: &str, label: &str, v: Option<f64>) -> Field {
     // -1 sentinel = "auto / none"
     f_len(key, label, v.unwrap_or(-0.001))
+}
+fn f_color(key: &str, label: &str, rgba: [u8; 4]) -> Field {
+    let hex = format!(
+        "#{:02X}{:02X}{:02X}{:02X}",
+        rgba[0], rgba[1], rgba[2], rgba[3]
+    );
+    Field {
+        key: key.into(),
+        label: label.into(),
+        kind: FieldKind::Color,
+        value: json!(hex),
+        options: None,
+        unit: None,
+        section: None,
+    }
+}
+/// Append a `section` tag to the most recently-pushed fields. Saves the
+/// per-field section: assignment boilerplate.
+fn tag_section(fields: &mut [Field], from: usize, section: &str) {
+    for f in &mut fields[from..] {
+        if f.section.is_none() {
+            f.section = Some(section.into());
+        }
+    }
+}
+fn finish_str(f: Finish) -> &'static str {
+    match f {
+        Finish::Rough => "rough",
+        Finish::RoughUnfinished => "rough_unfinished",
+        Finish::Unfinished => "unfinished",
+        Finish::Normal => "normal",
+        Finish::Smooth => "smooth",
+        Finish::Optimum => "optimum",
+        Finish::Polished => "polished",
+        Finish::FinishPolished => "finish_polished",
+        Finish::Mirror => "mirror",
+    }
+}
+const FINISHES: &[&str] = &[
+    "rough",
+    "rough_unfinished",
+    "unfinished",
+    "normal",
+    "smooth",
+    "optimum",
+    "polished",
+    "finish_polished",
+    "mirror",
+];
+fn parse_finish(s: &str) -> Finish {
+    match s {
+        "rough" => Finish::Rough,
+        "rough_unfinished" => Finish::RoughUnfinished,
+        "unfinished" => Finish::Unfinished,
+        "smooth" => Finish::Smooth,
+        "optimum" => Finish::Optimum,
+        "polished" => Finish::Polished,
+        "finish_polished" => Finish::FinishPolished,
+        "mirror" => Finish::Mirror,
+        _ => Finish::Normal,
+    }
+}
+fn parse_hex_rgba(s: &str) -> Option<[u8; 4]> {
+    let s = s.trim_start_matches('#');
+    if s.len() != 8 && s.len() != 6 {
+        return None;
+    }
+    let mut out = [0u8; 4];
+    out[3] = 255;
+    let bytes = s.as_bytes();
+    for i in 0..(s.len() / 2) {
+        let hi = (bytes[i * 2] as char).to_digit(16)? as u8;
+        let lo = (bytes[i * 2 + 1] as char).to_digit(16)? as u8;
+        out[i] = (hi << 4) | lo;
+    }
+    Some(out)
 }
 
 fn nose_shape_str(s: NoseShape) -> &'static str {
@@ -118,16 +201,66 @@ fn axial_str(a: AxialMethod) -> &'static str {
 const AXIAL: &[&str] = &["after", "top", "bottom", "middle", "absolute"];
 
 fn common_fields(c: &Common) -> Vec<Field> {
-    let mut v = vec![
-        f_text("name", "Name", &c.name),
-        f_enum("axial_method", "Position", axial_str(c.axial_method), AXIAL),
-        f_len("axial_offset", "Offset", c.axial_offset),
-    ];
+    let mut v = Vec::new();
+
+    // General: identity + placement + material/finish (the surface knobs)
+    v.push(f_text("name", "Name", &c.name));
+    v.push(f_enum("axial_method", "Position", axial_str(c.axial_method), AXIAL));
+    v.push(f_len("axial_offset", "Offset", c.axial_offset));
+    v.push(f_ang("angle_offset", "Angle offset", c.angle_offset));
     if let Some(m) = &c.material {
         v.push(f_text("material_name", "Material", &m.name));
         v.push(f_num("material_density", "Density (SI)", m.density));
     }
-    v.push(f_num("mass_override", "Mass override (g, <0=off)", c.mass_override.map(|x| x * 1000.0).unwrap_or(-1.0)));
+    v.push(f_enum("finish", "Surface finish", finish_str(c.finish), FINISHES));
+    tag_section(&mut v, 0, "general");
+
+    // Override: mass / cg / cd plus their subcomponents flags
+    let from = v.len();
+    v.push(f_mass(
+        "mass_override",
+        "Mass override (<0=off)",
+        c.mass_override.unwrap_or(-0.001),
+    ));
+    v.push(f_len(
+        "cg_override",
+        "CG override (<0=off)",
+        c.cg_override.unwrap_or(-0.001),
+    ));
+    v.push(f_bool(
+        "override_subcomponents_mass",
+        "Override subcomponents mass",
+        c.override_subcomponents_mass,
+    ));
+    v.push(f_num(
+        "cd_override",
+        "CD override (<0=off)",
+        c.cd_override.unwrap_or(-1.0),
+    ));
+    v.push(f_bool(
+        "override_subcomponents_cd",
+        "Override subcomponents CD",
+        c.override_subcomponents_cd,
+    ));
+    tag_section(&mut v, from, "override");
+
+    // Appearance: paint + shine. If the component has no appearance yet,
+    // expose the default so the user can edit it without an extra click.
+    let from = v.len();
+    let app = c.appearance.clone().unwrap_or(Appearance {
+        paint: [200, 200, 200, 255],
+        shine: 0.3,
+        decal: None,
+    });
+    v.push(f_color("appearance_paint", "Paint colour", app.paint));
+    v.push(f_num("appearance_shine", "Shine (0-1)", app.shine));
+    tag_section(&mut v, from, "appearance");
+
+    // Comment: free-text note attached to the component.
+    let from = v.len();
+    v.push(f_text("comment", "Comment", &c.comment));
+    tag_section(&mut v, from, "comment");
+
     v
 }
 
@@ -142,28 +275,50 @@ fn fields_for(comp: &Component) -> Vec<Field> {
     let mut f = common_fields(comp.common());
     match comp {
         Component::NoseCone(n) => {
+            let gen_from = f.len();
             f.push(f_enum("shape", "Shape", nose_shape_str(n.shape), SHAPES));
             f.push(f_num("shape_parameter", "Shape param", n.shape_parameter));
             f.push(f_len("length", "Length", n.length));
             f.push(f_len("aft_radius", "Base radius", n.aft_radius));
             f.push(f_len("thickness", "Wall thickness", n.thickness));
+            f.push(f_bool("filled", "Filled", n.filled));
+            f.push(f_bool("is_flipped", "Flipped", n.is_flipped));
+            tag_section(&mut f, gen_from, "general");
+            let sh_from = f.len();
             f.push(f_len("aft_shoulder_radius", "Shoulder radius", n.aft_shoulder_radius));
             f.push(f_len("aft_shoulder_length", "Shoulder length", n.aft_shoulder_length));
+            f.push(f_len("aft_shoulder_thickness", "Shoulder thickness", n.aft_shoulder_thickness));
             f.push(f_bool("aft_shoulder_capped", "Shoulder capped", n.aft_shoulder_capped));
-            f.push(f_bool("is_flipped", "Flipped", n.is_flipped));
+            tag_section(&mut f, sh_from, "shoulder");
         }
         Component::BodyTube(b) => {
+            let gen_from = f.len();
             f.push(f_len("length", "Length", b.length));
             f.push(f_opt_len("radius", "Outer radius (<0=auto)", b.radius));
             f.push(f_len("thickness", "Wall thickness", b.thickness));
+            tag_section(&mut f, gen_from, "general");
         }
         Component::Transition(t) => {
+            let gen_from = f.len();
             f.push(f_enum("shape", "Shape", nose_shape_str(t.shape), SHAPES));
             f.push(f_num("shape_parameter", "Shape param", t.shape_parameter));
             f.push(f_len("length", "Length", t.length));
             f.push(f_len("fore_radius", "Fore radius", t.fore_radius));
             f.push(f_len("aft_radius", "Aft radius", t.aft_radius));
             f.push(f_len("thickness", "Wall thickness", t.thickness));
+            f.push(f_bool("filled", "Filled", t.filled));
+            f.push(f_bool("clipped", "Clipped", t.clipped));
+            tag_section(&mut f, gen_from, "general");
+            let sh_from = f.len();
+            f.push(f_len("fore_shoulder_radius", "Fore shoulder radius", t.fore_shoulder_radius));
+            f.push(f_len("fore_shoulder_length", "Fore shoulder length", t.fore_shoulder_length));
+            f.push(f_len("fore_shoulder_thickness", "Fore shoulder thickness", t.fore_shoulder_thickness));
+            f.push(f_bool("fore_shoulder_capped", "Fore shoulder capped", t.fore_shoulder_capped));
+            f.push(f_len("aft_shoulder_radius", "Aft shoulder radius", t.aft_shoulder_radius));
+            f.push(f_len("aft_shoulder_length", "Aft shoulder length", t.aft_shoulder_length));
+            f.push(f_len("aft_shoulder_thickness", "Aft shoulder thickness", t.aft_shoulder_thickness));
+            f.push(f_bool("aft_shoulder_capped", "Aft shoulder capped", t.aft_shoulder_capped));
+            tag_section(&mut f, sh_from, "shoulder");
         }
         Component::InnerTube(it) => {
             f.push(f_len("length", "Length", it.length));
@@ -435,9 +590,25 @@ fn set_common(common: &mut Common, key: &str, v: &Value) -> Result<bool, String>
             common.axial_offset = as_f64(v)? / M2MM;
             Ok(true)
         }
+        "angle_offset" => {
+            common.angle_offset = as_f64(v)?.to_radians();
+            Ok(true)
+        }
         "material_name" => {
-            if let Some(m) = &mut common.material {
-                m.name = as_str(v)?;
+            let name = as_str(v)?;
+            // If the name matches the bundled materials catalog, adopt its
+            // density + kind + group so the user doesn't have to enter them.
+            if let Some(entry) = opsrocket_core::material::Material::lookup(&name) {
+                common.material = Some(entry.into_material());
+            } else if let Some(m) = &mut common.material {
+                m.name = name;
+            } else {
+                common.material = Some(Material {
+                    name,
+                    kind: MaterialType::Bulk,
+                    density: 0.0,
+                    group: None,
+                });
             }
             Ok(true)
         }
@@ -452,9 +623,61 @@ fn set_common(common: &mut Common, key: &str, v: &Value) -> Result<bool, String>
             }
             Ok(true)
         }
+        "finish" => {
+            common.finish = parse_finish(&as_str(v)?);
+            Ok(true)
+        }
         "mass_override" => {
+            // grams in the UI; struct stores kg. Sentinel <0 = off.
             let g = as_f64(v)?;
             common.mass_override = if g < 0.0 { None } else { Some(g / 1000.0) };
+            Ok(true)
+        }
+        "cg_override" => {
+            // mm in the UI; struct stores metres. Sentinel <0 = off.
+            let mm = as_f64(v)?;
+            common.cg_override = if mm < 0.0 { None } else { Some(mm / M2MM) };
+            Ok(true)
+        }
+        "override_subcomponents_mass" => {
+            common.override_subcomponents_mass = as_bool(v)?;
+            Ok(true)
+        }
+        "cd_override" => {
+            let x = as_f64(v)?;
+            common.cd_override = if x < 0.0 { None } else { Some(x) };
+            Ok(true)
+        }
+        "override_subcomponents_cd" => {
+            common.override_subcomponents_cd = as_bool(v)?;
+            Ok(true)
+        }
+        "appearance_paint" => {
+            let hex = as_str(v)?;
+            let rgba =
+                parse_hex_rgba(&hex).ok_or_else(|| format!("bad colour {hex}"))?;
+            let mut app = common.appearance.clone().unwrap_or(Appearance {
+                paint: [200, 200, 200, 255],
+                shine: 0.3,
+                decal: None,
+            });
+            app.paint = rgba;
+            common.appearance = Some(app);
+            Ok(true)
+        }
+        "appearance_shine" => {
+            let s = as_f64(v)?.clamp(0.0, 1.0);
+            let mut app = common.appearance.clone().unwrap_or(Appearance {
+                paint: [200, 200, 200, 255],
+                shine: 0.3,
+                decal: None,
+            });
+            app.shine = s;
+            common.appearance = Some(app);
+            Ok(true)
+        }
+        "comment" => {
+            common.comment = as_str(v)?;
             Ok(true)
         }
         _ => Ok(false),
@@ -502,8 +725,10 @@ pub fn apply_edit(rocket: &mut Rocket, id: &str, key: &str, v: &Value) -> Result
             "length" => n.length = mm(v)?,
             "aft_radius" => n.aft_radius = mm(v)?,
             "thickness" => n.thickness = mm(v)?,
+            "filled" => n.filled = as_bool(v)?,
             "aft_shoulder_radius" => n.aft_shoulder_radius = mm(v)?,
             "aft_shoulder_length" => n.aft_shoulder_length = mm(v)?,
+            "aft_shoulder_thickness" => n.aft_shoulder_thickness = mm(v)?,
             "aft_shoulder_capped" => n.aft_shoulder_capped = as_bool(v)?,
             "is_flipped" => n.is_flipped = as_bool(v)?,
             _ => return Err(format!("NoseCone has no field {key}")),
@@ -524,6 +749,16 @@ pub fn apply_edit(rocket: &mut Rocket, id: &str, key: &str, v: &Value) -> Result
             "fore_radius" => t.fore_radius = mm(v)?,
             "aft_radius" => t.aft_radius = mm(v)?,
             "thickness" => t.thickness = mm(v)?,
+            "filled" => t.filled = as_bool(v)?,
+            "clipped" => t.clipped = as_bool(v)?,
+            "fore_shoulder_radius" => t.fore_shoulder_radius = mm(v)?,
+            "fore_shoulder_length" => t.fore_shoulder_length = mm(v)?,
+            "fore_shoulder_thickness" => t.fore_shoulder_thickness = mm(v)?,
+            "fore_shoulder_capped" => t.fore_shoulder_capped = as_bool(v)?,
+            "aft_shoulder_radius" => t.aft_shoulder_radius = mm(v)?,
+            "aft_shoulder_length" => t.aft_shoulder_length = mm(v)?,
+            "aft_shoulder_thickness" => t.aft_shoulder_thickness = mm(v)?,
+            "aft_shoulder_capped" => t.aft_shoulder_capped = as_bool(v)?,
             _ => return Err(format!("Transition has no field {key}")),
         },
         Component::InnerTube(it) => match key {
@@ -714,6 +949,15 @@ fn default_component(kind: &str) -> Result<Component, String> {
             aft_radius: 0.025,
             thickness: 0.002,
             filled: false,
+            clipped: false,
+            fore_shoulder_radius: 0.0,
+            fore_shoulder_length: 0.0,
+            fore_shoulder_thickness: 0.0,
+            fore_shoulder_capped: false,
+            aft_shoulder_radius: 0.0,
+            aft_shoulder_length: 0.0,
+            aft_shoulder_thickness: 0.0,
+            aft_shoulder_capped: false,
             children: vec![],
         }),
         "InnerTube" => Component::InnerTube(InnerTube {
@@ -901,4 +1145,82 @@ pub fn add_component(
         }
     }
     Err(format!("parent {parent_id} not found or cannot hold children"))
+}
+
+/// Apply a preset (from `core::preset`) to an existing component.
+///
+/// Copies the preset's dimensions and material onto the matching component
+/// kind. Returns an error if the preset kind doesn't fit the target.
+pub fn apply_preset(
+    rocket: &mut Rocket,
+    comp_id: &str,
+    preset: &opsrocket_core::preset::Preset,
+) -> Result<(), String> {
+    use opsrocket_core::preset::PresetKind;
+    let comp = find_mut(rocket, comp_id)
+        .ok_or_else(|| format!("component {comp_id} not found"))?;
+    let kind = kind_of(comp);
+    let m = |mm: f64| mm / M2MM;
+    let mat = || {
+        opsrocket_core::material::Material::lookup(preset.material)
+            .map(|e| e.into_material())
+    };
+    match (preset.kind, comp) {
+        (PresetKind::BodyTube, Component::BodyTube(b)) => {
+            b.length = m(preset.length_mm);
+            b.radius = Some(m(preset.od_mm / 2.0));
+            b.thickness = m((preset.od_mm - preset.id_mm) / 2.0).max(0.0);
+            if let Some(material) = mat() {
+                b.common.material = Some(material);
+            }
+        }
+        (PresetKind::NoseCone, Component::NoseCone(n)) => {
+            n.length = m(preset.length_mm);
+            n.aft_radius = m(preset.od_mm / 2.0);
+            n.thickness = m((preset.od_mm - preset.id_mm) / 2.0).max(0.0);
+            n.aft_shoulder_radius = if preset.id_mm > 0.0 {
+                m(preset.id_mm / 2.0)
+            } else {
+                0.0
+            };
+            n.aft_shoulder_length = m(preset.shoulder_length_mm);
+            n.aft_shoulder_thickness = m((preset.od_mm - preset.id_mm) / 2.0).max(0.0);
+            n.shape = parse_shape(preset.shape);
+            if let Some(material) = mat() {
+                n.common.material = Some(material);
+            }
+        }
+        (PresetKind::Transition, Component::Transition(t)) => {
+            t.length = m(preset.length_mm);
+            t.fore_radius = m(preset.od_mm / 2.0);
+            t.aft_radius = m(preset.od2_mm.max(preset.od_mm) / 2.0);
+            t.thickness = m((preset.od_mm - preset.id_mm) / 2.0).max(0.0);
+            if let Some(material) = mat() {
+                t.common.material = Some(material);
+            }
+        }
+        (PresetKind::InnerTube, Component::InnerTube(it)) => {
+            it.length = m(preset.length_mm);
+            it.outer_radius = m(preset.od_mm / 2.0);
+            it.inner_radius = m(preset.id_mm / 2.0);
+            if let Some(material) = mat() {
+                it.common.material = Some(material);
+            }
+        }
+        (PresetKind::CenteringRing, Component::CenteringRing(cr)) => {
+            cr.length = m(preset.length_mm);
+            cr.outer_radius = m(preset.od_mm / 2.0);
+            cr.inner_radius = m(preset.id_mm / 2.0);
+            if let Some(material) = mat() {
+                cr.common.material = Some(material);
+            }
+        }
+        (preset_kind, _) => {
+            return Err(format!(
+                "preset {:?} does not fit a {} component",
+                preset_kind, kind
+            ));
+        }
+    }
+    Ok(())
 }

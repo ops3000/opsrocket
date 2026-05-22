@@ -107,7 +107,8 @@ export type FieldKind =
   | "int"
   | "bool"
   | "text"
-  | "enum";
+  | "enum"
+  | "color";
 
 export interface Field {
   key: string;
@@ -116,7 +117,56 @@ export interface Field {
   value: unknown;
   options?: string[];
   unit?: string;
+  /** "general" | "shoulder" | "override" | "appearance" | "comment" | undefined. */
+  section?: string;
 }
+
+export interface Material {
+  name: string;
+  kind: "bulk" | "surface" | "line";
+  density: number;
+  group: string;
+}
+
+export interface ComponentMassInfo {
+  id: string;
+  name: string;
+  kind: string;
+  mass_g: number;
+}
+
+// Fetch the bundled materials catalog (browser-mode shim handles /api/list_materials).
+export const listMaterials = (): Promise<{ materials: Material[] }> =>
+  req("list_materials", "GET");
+
+// Single-component mass (grams).
+export const componentMass = (id: string): Promise<ComponentMassInfo> =>
+  req("component_mass", "POST", { id });
+
+export interface Preset {
+  id: string;
+  manufacturer: string;
+  part_no: string;
+  kind: string;
+  description: string;
+  od_mm: number;
+  od2_mm?: number;
+  id_mm?: number;
+  length_mm: number;
+  shoulder_length_mm?: number;
+  shape?: string;
+  material: string;
+  mass_g?: number;
+}
+
+export const listPresets = (
+  filter: {
+    kind?: string;
+    manufacturer?: string;
+    body_od_mm?: number;
+    contains?: string;
+  } = {},
+): Promise<{ presets: Preset[] }> => req("list_presets", "POST", filter);
 export interface EditNode {
   id: string;
   kind: string;

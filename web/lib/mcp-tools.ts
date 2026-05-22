@@ -359,6 +359,31 @@ export const TOOLS: ToolDef[] = [
     },
   },
 
+  // -- workbench bridge --------------------------------------------------
+  {
+    name: "open_in_workbench",
+    description:
+      "Surface a bundled example or any .ork (b64/url) as `ork_b64`. When the user has the workbench open in another tab, the client auto-loads whatever this returns — so call this whenever the user says 'open X', 'load X', 'show me X', or wants to see a design in 3D. No-op otherwise (the chat just gets the bytes back).",
+    inputSchema: ROCKET_INPUT,
+    handler: async (a, { req }) => {
+      try {
+        const b = await resolveRocket(req, pickInput(a));
+        const j = JSON.parse(ops.mcp_inspect(b));
+        return ok(
+          {
+            ork_b64: Buffer.from(b).toString("base64"),
+            name: j.view?.name,
+            components: (j.view?.components ?? []).length,
+            total_length_m: j.view?.total_length,
+          },
+          500_000,
+        );
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  },
+
   // -- design / editing (stateless: thread ork_b64 through) --------------
   {
     name: "new_document",
@@ -368,7 +393,10 @@ export const TOOLS: ToolDef[] = [
     handler: async () => {
       try {
         const bytes = ops.mcp_new_document();
-        return ok({ ork_b64: Buffer.from(bytes).toString("base64") });
+        return ok(
+          { ork_b64: Buffer.from(bytes).toString("base64") },
+          500_000,
+        );
       } catch (e) {
         return fail(e);
       }
@@ -378,7 +406,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "edit_apply",
     description:
-      'Apply a batch of edit ops and return the new ork_b64 + a stability/tree snapshot. Ops: patch_field{id,key,value} | add_component{parent_id,kind} | delete_component{id} | patch_sim{sim_name,key,value} | assign_motor{mount_id,config_id,designation,digest?,ejection_delay?} | clear_motor{mount_id,config_id} | set_ignition{mount_id,event,delay?}.',
+      'Apply a batch of edit ops and return the new ork_b64 + a stability/tree snapshot. Ops: patch_field{id,key,value} | add_component{parent_id,kind} | delete_component{id} | patch_sim{sim_name,key,value} | assign_motor{mount_id,config_id,designation,digest?,ejection_delay?} | clear_motor{mount_id,config_id} | set_ignition{mount_id,event,delay?} | apply_preset{id,preset_id}.',
     inputSchema: {
       ...ROCKET_INPUT,
       ops: z
@@ -390,10 +418,94 @@ export const TOOLS: ToolDef[] = [
         const b = await resolveRocket(req, pickInput(a));
         const out = ops.mcp_edit_apply(b, JSON.stringify(a.ops));
         const snap = JSON.parse(ops.mcp_stability(out));
-        return ok({
-          ork_b64: Buffer.from(out).toString("base64"),
-          stability: snap.stability,
+        return ok(
+          {
+            ork_b64: Buffer.from(out).toString("base64"),
+            stability: snap.stability,
+          },
+          500_000,
+        );
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  },
+
+  // -- materials ---------------------------------------------------------
+  {
+    name: "list_materials",
+    description:
+      "The bundled materials catalog (OpenRocket-compatible). Returns Bulk (kg/m³), Surface (kg/m²) and Line (kg/m) entries with their density and group (wood / plastic / composite / metal / film / fabric / cord / …). Use the entry's exact `name` as material_name in edit_apply (the density is filled in automatically).",
+    inputSchema: {
+      kind: z.enum(["bulk", "surface", "line"]).optional(),
+      group: z.string().optional(),
+      contains: z.string().optional(),
+    },
+    handler: async (a) => {
+      try {
+        const all = JSON.parse(ops.mcp_list_materials()).materials as Record<
+          string,
+          unknown
+        >[];
+        let m = all;
+        const kind = a.kind as string | undefined;
+        const group = a.group as string | undefined;
+        const contains = a.contains as string | undefined;
+        if (kind) m = m.filter((x) => String(x.kind ?? "") === kind);
+        if (group)
+          m = m.filter(
+            (x) =>
+              String(x.group ?? "").toLowerCase() === group.toLowerCase(),
+          );
+        if (contains)
+          m = m.filter((x) =>
+            String(x.name ?? "")
+              .toLowerCase()
+              .includes(contains.toLowerCase()),
+          );
+        return ok({ count: m.length, materials: m });
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  },
+
+  {
+    name: "list_presets",
+    description:
+      "Bundled component preset catalog — manufacturer + part number for body tubes, nose cones, transitions, inner tubes (motor mounts), and centering rings (Estes BT-*, PNC-*, AeroTech motor mounts, LOC Precision, Apogee). To apply a preset to a component use edit_apply with {op:'apply_preset', id:<comp_id>, preset_id:<preset.id>}.",
+    inputSchema: {
+      kind: z
+        .enum(["body_tube", "nose_cone", "transition", "inner_tube", "centering_ring"])
+        .optional(),
+      manufacturer: z.string().optional(),
+      body_od_mm: z.number().optional(),
+      contains: z.string().optional(),
+    },
+    handler: async (a) => {
+      try {
+        const filter = JSON.stringify({
+          kind: a.kind,
+          manufacturer: a.manufacturer,
+          body_od_mm: a.body_od_mm,
+          contains: a.contains,
         });
+        return ok(JSON.parse(ops.mcp_list_presets(filter)));
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  },
+
+  {
+    name: "component_mass",
+    description:
+      "Mass of a single component (grams) in the current design. Find comp_id via inspect's tree.",
+    inputSchema: { ...ROCKET_INPUT, comp_id: z.string() },
+    handler: async (a, { req }) => {
+      try {
+        const b = await resolveRocket(req, pickInput(a));
+        return ok(JSON.parse(ops.mcp_component_mass(b, a.comp_id as string)));
       } catch (e) {
         return fail(e);
       }
@@ -509,7 +621,10 @@ export const TOOLS: ToolDef[] = [
       try {
         const b = await resolveRocket(req, pickInput(a));
         if (a.format === "ork")
-          return ok({ ork_b64: Buffer.from(b).toString("base64") });
+          return ok(
+            { ork_b64: Buffer.from(b).toString("base64") },
+            500_000,
+          );
         if (a.format === "rocket_view_json")
           return ok(JSON.parse(ops.mcp_inspect(b)).view);
         const f = JSON.parse(

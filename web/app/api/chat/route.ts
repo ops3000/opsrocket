@@ -24,7 +24,10 @@ const MAX_TOTAL_CHARS = 12_000;
 const MAX_HOPS = 5;
 const TOOL_TIMEOUT_MS = 30_000;
 const TOOL_PREVIEW_CHARS = 500;
-const TOOL_RESULT_CHARS = 16_000; // what we feed back to the model
+// What we feed back to the model. Has to comfortably fit a typical .ork
+// base64 string (small designs are ~10–20 KB encoded; complex ones can
+// touch ~80 KB) so edit_apply → simulate chains can thread `ork_b64`.
+const TOOL_RESULT_CHARS = 500_000;
 
 // Local-dev bypass: skip the GitHub session check when this env is "1"
 // and we're not in production. Mirrors the bypass in /api/auth/me.
@@ -52,7 +55,10 @@ function buildSystemPrompt(): string {
     "  - `simulate` for flight numbers; `stability` for CG/CP/margin; `aero_analysis` for per-component aero",
     "  - `optimize` to sweep a field; `edit_apply` to mutate; `new_document` to start blank",
     "  - `list_motors` / `motor_info` for the thrust-curve database",
-    "Threading: tools return `ork_b64`; pass it back into the next tool to keep edits stateless.",
+    "  - `open_in_workbench` whenever the user asks to open/load/show a design — when their workbench is open in another tab, this auto-loads it there",
+    "Threading: tools return `ork_b64`; pass it back into the next tool to keep edits stateless. When a tool returns `ork_b64` (e.g. `new_document`, `edit_apply`, `open_in_workbench`, `export`), the user's open Workbench tab auto-loads it — no manual step needed.",
+    "",
+    "If a workbench context message is present, prefer it as the default subject. For tools that take a rocket input, call them with NO rocket-input args — the server fills in the workbench's design automatically. Do not try to copy the workbench's ork_b64 yourself; it's far too large to pass through a tool call without corruption.",
     "",
     "Only mention tools that are in the function-calling list provided to you this turn. Do not invent tool names or claim to have called tools that are not in that list. For OpenRocket parity questions, load the `opsrocket` skill — its tables are the authoritative source.",
     skillIndex,
@@ -236,11 +242,11 @@ export async function POST(req: Request) {
     sdkMessages.push({
       role: "system",
       content: [
-        `The user currently has a design${tag} open in their Workbench (${dims || "details unknown"}).`,
-        "When they ask about \"my rocket\" / \"this design\" / \"the current rocket\", pass ork_b64 below as the input to relevant tools (inspect, stability, simulate, aero_analysis, optimize, edit_apply, etc.).",
-        "Do NOT echo this base64 back to the user.",
+        `The user has a design${tag} open in their Workbench right now (${dims || "details unknown"}). Treat this as the default subject of the conversation.`,
         "",
-        `ork_b64=${workbench.ork_b64}`,
+        "For ANY tool that accepts a rocket input (ork_b64 / example / ork_url) — inspect, stability, simulate, aero_analysis, mass_breakdown, optimize, edit_apply, export, open_in_workbench, etc. — call it WITHOUT supplying ork_b64/example/ork_url. The server will automatically thread in the workbench's current design. Only specify a rocket input when you explicitly need to target a different design.",
+        "",
+        "Never paste the workbench's base64 into a tool call yourself — it's hundreds of KB and will be corrupted in transit.",
       ].join("\n"),
     });
   }
@@ -331,6 +337,20 @@ export async function POST(req: Request) {
               a: args,
             });
 
+            // Auto-inject the workbench's current `ork_b64` when the model
+            // didn't pass any rocket input. The model sees the design's
+            // name in a system message but cannot reliably copy a 200+ KB
+            // base64 string through a tool call — so we resolve it for it.
+            let execArgs = args;
+            if (
+              workbench &&
+              !args.ork_b64 &&
+              !args.example &&
+              !args.ork_url
+            ) {
+              execArgs = { ...args, ork_b64: workbench.ork_b64 };
+            }
+
             if (!tool) {
               const errMsg = `unknown tool: ${tc.function.name}`;
               sdkMessages.push({
@@ -350,12 +370,16 @@ export async function POST(req: Request) {
 
             try {
               const result = await withTimeout(
-                tool.handler(args, { req }),
+                tool.handler(execArgs, { req }),
                 TOOL_TIMEOUT_MS,
                 tc.function.name,
               );
+              // Pull ork_b64 from the FULL result text first; the model-
+              // facing slice may strip the end of the string and break
+              // JSON.parse.
+              const fullText = result.content.map((c) => c.text).join("\n");
+              const orkB64 = extractOrkB64(fullText);
               const text = toolResultText(result);
-              const orkB64 = extractOrkB64(text);
               sdkMessages.push({
                 role: "tool",
                 tool_call_id: tc.id,

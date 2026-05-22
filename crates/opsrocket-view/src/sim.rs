@@ -20,6 +20,7 @@ fn f(key: &str, label: &str, kind: FieldKind, v: f64, unit: &str) -> Field {
         value: json!(v),
         options: None,
         unit: if unit.is_empty() { None } else { Some(unit.into()) },
+        section: None,
     }
 }
 

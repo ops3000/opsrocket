@@ -17,6 +17,7 @@ pub mod gravity;
 pub mod interp;
 pub mod material;
 pub mod mathx;
+pub mod preset;
 pub mod profile;
 pub mod rigidbody;
 pub mod wind;
