@@ -3,6 +3,7 @@ import { HeroSideviews } from "@/components/HeroSideviews";
 import { HeroPrompt } from "@/components/HeroPrompt";
 import { MobileMenu } from "@/components/MobileMenu";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { GitHubStars } from "@/components/GitHubStars";
 import { HEADLINE } from "@/lib/data";
 
 // Home is now just the blueprint hero. PARITY / VALIDATION / RENDER /
@@ -42,12 +43,15 @@ export default function Home() {
               ARCHITECTURE
             </Link>
           </div>
-          <Link
-            href="/workspace"
-            className="hidden rounded-full border border-[var(--accent)] bg-[rgba(255,45,120,0.12)] px-4 py-2 text-sm font-semibold text-ink transition hover:bg-[rgba(255,45,120,0.25)] sm:inline-flex"
-          >
-            Open Workbench →
-          </Link>
+          <div className="hidden items-center gap-3 sm:flex">
+            <GitHubStars />
+            <Link
+              href="/workspace"
+              className="rounded-full border border-[var(--accent)] bg-[rgba(255,45,120,0.12)] px-4 py-2 text-sm font-semibold text-ink transition hover:bg-[rgba(255,45,120,0.25)]"
+            >
+              Open Workbench →
+            </Link>
+          </div>
           <MobileMenu />
         </nav>
 
