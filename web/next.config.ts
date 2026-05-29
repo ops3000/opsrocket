@@ -22,7 +22,45 @@ const nextConfig: NextConfig = {
     ],
   },
   async headers() {
+    // CSP: 'wasm-unsafe-eval' is non-negotiable because /workspace compiles
+    // the OpsRocket WebAssembly engine in the browser. 'unsafe-inline' on
+    // script-src is the pragmatic call for a marketing/docs site — Next.js
+    // ships an inline bootstrap script per page, and switching to per-request
+    // nonces would force every static route dynamic. Same reasoning on
+    // style-src for styled-jsx / Tailwind inline styles. connect-src is
+    // 'self'-only because every external API call (GitHub, DeepSeek, etc.)
+    // is brokered server-side; nothing in the browser talks off-origin.
+    const csp = [
+      "default-src 'self'",
+      "script-src 'self' 'wasm-unsafe-eval' 'unsafe-inline'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: blob:",
+      "font-src 'self' data:",
+      "connect-src 'self'",
+      "worker-src 'self' blob:",
+      "frame-ancestors 'none'",
+      "base-uri 'self'",
+      "form-action 'self'",
+      "object-src 'none'",
+      "upgrade-insecure-requests",
+    ].join("; ");
+
+    const securityHeaders = [
+      { key: "Content-Security-Policy", value: csp },
+      { key: "X-Content-Type-Options", value: "nosniff" },
+      { key: "X-Frame-Options", value: "DENY" },
+      { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+      {
+        key: "Permissions-Policy",
+        value: "camera=(), microphone=(), geolocation=(), interest-cohort=()",
+      },
+    ];
+
     return [
+      {
+        source: "/:path*",
+        headers: securityHeaders,
+      },
       {
         // The demo .ork files behind the homepage hero are static assets
         // that only change on a deploy. Default Next static serving tags
