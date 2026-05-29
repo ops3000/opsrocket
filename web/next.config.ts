@@ -38,7 +38,9 @@ const nextConfig: NextConfig = {
       "font-src 'self' data:",
       "connect-src 'self'",
       "worker-src 'self' blob:",
-      "frame-ancestors 'none'",
+      // 'self' (not 'none') because /workspace iframes /workspace-app/* —
+      // the actual Vite+Three.js workbench is a same-origin embedded doc.
+      "frame-ancestors 'self'",
       "base-uri 'self'",
       "form-action 'self'",
       "object-src 'none'",
@@ -48,7 +50,7 @@ const nextConfig: NextConfig = {
     const securityHeaders = [
       { key: "Content-Security-Policy", value: csp },
       { key: "X-Content-Type-Options", value: "nosniff" },
-      { key: "X-Frame-Options", value: "DENY" },
+      { key: "X-Frame-Options", value: "SAMEORIGIN" },
       { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
       {
         key: "Permissions-Policy",
