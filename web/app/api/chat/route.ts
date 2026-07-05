@@ -21,7 +21,15 @@ export const maxDuration = 300;
 
 const MAX_MESSAGES = 30;
 const MAX_TOTAL_CHARS = 12_000;
-const MAX_HOPS = 5;
+const DEFAULT_MAX_HOPS = 25;
+const MAX_HOPS = Math.min(
+  50,
+  Math.max(
+    1,
+    Number.parseInt(process.env.OPSROCKET_CHAT_MAX_HOPS ?? "", 10) ||
+      DEFAULT_MAX_HOPS,
+  ),
+);
 const TOOL_TIMEOUT_MS = 30_000;
 const TOOL_PREVIEW_CHARS = 500;
 // What we feed back to the model. Has to comfortably fit a typical .ork
@@ -259,6 +267,7 @@ export async function POST(req: Request) {
         controller.enqueue(encoder.encode(JSON.stringify(ev) + "\n"));
 
       try {
+        let completed = false;
         for (let hop = 0; hop < MAX_HOPS; hop++) {
           const stream = await client.chat.completions.create({
             model,
@@ -272,6 +281,7 @@ export async function POST(req: Request) {
           });
 
           let textBuf = "";
+          let finishReason: string | null = null;
           // index → partial accumulator
           const toolBuf = new Map<
             number,
@@ -279,7 +289,9 @@ export async function POST(req: Request) {
           >();
 
           for await (const chunk of stream) {
-            const delta = chunk.choices[0]?.delta;
+            const choice = chunk.choices[0];
+            if (choice?.finish_reason) finishReason = choice.finish_reason;
+            const delta = choice?.delta;
             if (!delta) continue;
             if (delta.content) {
               textBuf += delta.content;
@@ -302,6 +314,13 @@ export async function POST(req: Request) {
 
           if (toolBuf.size === 0) {
             // Plain text response — we're done.
+            if (finishReason && !["stop", "tool_calls"].includes(finishReason)) {
+              emit({
+                t: "text",
+                d: `\n\n[stopped: model finish reason "${finishReason}"]`,
+              });
+            }
+            completed = true;
             break;
           }
 
@@ -313,6 +332,15 @@ export async function POST(req: Request) {
               type: "function" as const,
               function: { name: b.name!, arguments: b.args || "{}" },
             }));
+
+          if (toolCalls.length === 0) {
+            emit({
+              t: "text",
+              d: "\n\n[stream error: model returned an incomplete tool call]",
+            });
+            completed = true;
+            break;
+          }
 
           sdkMessages.push({
             role: "assistant",
@@ -420,6 +448,14 @@ export async function POST(req: Request) {
             }
           }
           // loop again with tool results in history
+        }
+        if (!completed) {
+          emit({
+            t: "text",
+            d:
+              "\n\n[paused: reached this turn's tool-step limit. " +
+              'Send "continue" to keep going from the current design.]',
+          });
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : "unknown";

@@ -31,6 +31,44 @@ type AssistantPart =
 type Msg =
   | { role: "user"; text: string }
   | { role: "assistant"; parts: AssistantPart[] };
+type StreamEvent = {
+  t?: string;
+  s?: string;
+  d?: string;
+  i?: string;
+  n?: string;
+  a?: Record<string, unknown>;
+  r?: string;
+  e?: string;
+  ork_b64?: string;
+};
+
+const TOOL_HISTORY_CHARS = 800;
+
+function scrubToolHistory(text: string): string {
+  return text
+    .replace(/"ork_b64"\s*:\s*"[^"\n]*/g, '"ork_b64": "[omitted]')
+    .replace(/ork_b64=[^\s)\]}]+/g, "ork_b64=[omitted]")
+    .slice(0, TOOL_HISTORY_CHARS);
+}
+
+function toolEventHistory(event: ToolEvent): string {
+  const args =
+    event.args && Object.keys(event.args).length > 0
+      ? `\nargs=${scrubToolHistory(JSON.stringify(event.args))}`
+      : "";
+  const detail = event.error || event.result || "";
+  const result = detail ? `\n${scrubToolHistory(detail)}` : "";
+  const autoApplied = event.autoApplied ? "\nauto_applied=true" : "";
+  return `\n\n[tool ${event.name} ${event.status}${autoApplied}${args}${result}]`;
+}
+
+function assistantHistoryText(parts: AssistantPart[]): string {
+  const text = parts
+    .map((p) => (p.type === "text" ? p.text : toolEventHistory(p.event)))
+    .join("");
+  return text.trim() ? text : "[assistant response ended before text]";
+}
 
 function ToolChip({
   event,
@@ -156,13 +194,23 @@ export function ChatPill({
   const [dragY, setDragY] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [panelHeight, setPanelHeight] = useState(350);
-  // If the user clicked "Discuss this in chat" from a /learn chapter, the
-  // chapter slug + title were stashed in localStorage. We read them once
-  // on mount and inject a hidden leading message on the next /api/chat
-  // call so the copilot has the chapter as context.
   const [chapterSeed, setChapterSeed] = useState<
     { slug: string; title: string } | null
-  >(null);
+  >(() => {
+    if (seed || typeof window === "undefined") return seed;
+    try {
+      const raw = window.localStorage.getItem("opsrocket_chat_seed");
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as { slug?: string; title?: string };
+      window.localStorage.removeItem("opsrocket_chat_seed");
+      if (parsed.slug && parsed.title) {
+        return { slug: parsed.slug, title: parsed.title };
+      }
+    } catch {
+      // ignore malformed payload
+    }
+    return null;
+  });
   const { state: workbenchState, loadDesign, requestSimulate } = useWorkbench();
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -264,27 +312,6 @@ export function ChatPill({
     };
   }, []);
 
-  // Pick up the chapter seed. Priority: explicit `seed` prop (the /learn
-  // pages render ChatPill with one) → localStorage handoff (legacy path).
-  // Consumed on the next submit and then cleared.
-  useEffect(() => {
-    if (seed) {
-      setChapterSeed(seed);
-      return;
-    }
-    try {
-      const raw = window.localStorage.getItem("opsrocket_chat_seed");
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as { slug?: string; title?: string };
-      window.localStorage.removeItem("opsrocket_chat_seed");
-      if (parsed.slug && parsed.title) {
-        setChapterSeed({ slug: parsed.slug, title: parsed.title });
-      }
-    } catch {
-      // ignore malformed payload
-    }
-  }, [seed]);
-
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -340,15 +367,7 @@ export function ChatPill({
         : []),
       ...messages.map((m) => ({
         role: m.role,
-        content:
-          m.role === "user"
-            ? m.text
-            : m.parts
-                .filter((p): p is { type: "text"; text: string } =>
-                  p.type === "text",
-                )
-                .map((p) => p.text)
-                .join(""),
+        content: m.role === "user" ? m.text : assistantHistoryText(m.parts),
       })),
       { role: "user" as const, content: v },
     ];
@@ -379,16 +398,7 @@ export function ChatPill({
         return copy;
       });
 
-    const handleEvent = (ev: {
-      t?: string;
-      s?: string;
-      d?: string;
-      i?: string;
-      n?: string;
-      a?: Record<string, unknown>;
-      r?: string;
-      e?: string;
-    }) => {
+    const handleEvent = (ev: StreamEvent) => {
       if (ev.t === "text" && typeof ev.d === "string") {
         const d = ev.d;
         mutateLastAssistant((parts) => {
@@ -419,7 +429,7 @@ export function ChatPill({
         const r = ev.r;
         const e = ev.e;
         const name = ev.n;
-        const ork_b64 = (ev as { ork_b64?: string }).ork_b64;
+        const ork_b64 = ev.ork_b64;
         let autoApplied = false;
         if (autoApplyDesigns && ork_b64) {
           autoApplied = loadDesign(ork_b64);
@@ -474,6 +484,7 @@ export function ChatPill({
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let lineBuf = "";
+      let sawDone = false;
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -483,7 +494,9 @@ export function ChatPill({
         for (const line of lines) {
           if (!line.trim()) continue;
           try {
-            handleEvent(JSON.parse(line));
+            const ev = JSON.parse(line) as StreamEvent;
+            if (ev.t === "done") sawDone = true;
+            handleEvent(ev);
           } catch {
             /* skip malformed line */
           }
@@ -492,10 +505,15 @@ export function ChatPill({
       lineBuf += decoder.decode();
       if (lineBuf.trim()) {
         try {
-          handleEvent(JSON.parse(lineBuf));
+          const ev = JSON.parse(lineBuf) as StreamEvent;
+          if (ev.t === "done") sawDone = true;
+          handleEvent(ev);
         } catch {
           /* ignore tail garbage */
         }
+      }
+      if (!sawDone) {
+        throw new Error("stream ended before completion");
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "request failed";
@@ -664,10 +682,14 @@ export function ChatPill({
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={me.avatar_url}
-                  alt={me.login}
+                  alt=""
                   width={36}
                   height={36}
                   className="h-9 w-9 object-cover"
+                  onError={(e) => {
+                    e.currentTarget.onerror = null;
+                    e.currentTarget.src = "/ops-mark.png";
+                  }}
                 />
               </button>
               {accountOpen && (

@@ -27,14 +27,14 @@ const nextConfig: NextConfig = {
     // script-src is the pragmatic call for a marketing/docs site — Next.js
     // ships an inline bootstrap script per page, and switching to per-request
     // nonces would force every static route dynamic. Same reasoning on
-    // style-src for styled-jsx / Tailwind inline styles. connect-src is
-    // 'self'-only because every external API call (GitHub, DeepSeek, etc.)
-    // is brokered server-side; nothing in the browser talks off-origin.
+    // style-src for styled-jsx / Tailwind inline styles. GitHub avatar
+    // images are the only browser-side off-origin fetch; API calls stay
+    // brokered server-side.
     const csp = [
       "default-src 'self'",
       "script-src 'self' 'wasm-unsafe-eval' 'unsafe-inline'",
       "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data: blob:",
+      "img-src 'self' data: blob: https://avatars.githubusercontent.com https://github.com",
       "font-src 'self' data:",
       "connect-src 'self'",
       "worker-src 'self' blob:",
