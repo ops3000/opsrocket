@@ -652,6 +652,44 @@ pub fn mcp_extract_or_reference(
 pub fn mcp_new_document() -> Result<Vec<u8>, JsError> {
     let mut doc = opsrocket_view::new_document();
     opsrocket_view::schema::ensure_ids(&mut doc.rocket);
+    if doc.rocket.configurations.is_empty() {
+        doc.rocket
+            .configurations
+            .push(opsrocket_core::component::FlightConfiguration {
+                config_id: "cfg-0".to_string(),
+                name: Some("Default".to_string()),
+                active_stages: (0..doc.rocket.stages.len() as u32).collect(),
+            });
+    }
+    if doc.rocket.default_config.is_none() {
+        doc.rocket.default_config = Some(doc.rocket.configurations[0].config_id.clone());
+    }
+    if doc.simulations.is_empty() {
+        doc.simulations.push(opsrocket_io::CachedSimulation {
+            name: "Simulation 1".to_string(),
+            config_id: doc.rocket.default_config.clone(),
+            launch_rod_length: 1.0,
+            launch_rod_angle: 0.0,
+            launch_rod_direction: 0.0,
+            launch_altitude: 0.0,
+            launch_temperature: 288.15,
+            launch_pressure: 101_325.0,
+            launch_latitude: 28.61,
+            launch_longitude: 0.0,
+            geodetic_method: "spherical".to_string(),
+            wind_average: 0.0,
+            wind_standard_deviation: 0.2,
+            wind_turbulence: 0.1,
+            wind_direction: std::f64::consts::FRAC_PI_2,
+            use_isa: true,
+            launch_into_wind: true,
+            wind_layers: Vec::new(),
+            use_multi_level_wind: false,
+            time_step: 0.05,
+            max_time: 1200.0,
+            cached: None,
+        });
+    }
     opsrocket_io::write_ork_bytes(&doc).map_err(jerr)
 }
 

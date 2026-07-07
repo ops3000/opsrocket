@@ -68,6 +68,50 @@ function downsample(xs: number[], n: number): number[] {
   return Array.from({ length: n }, (_, i) => xs[Math.round(i * step)]);
 }
 
+function starterDocumentBytes(): Uint8Array {
+  const bytes = ops.mcp_new_document();
+  const editOps = [
+    { op: "patch_field", id: "stage-0", key: "name", value: "Sustainer" },
+    { op: "add_component", parent_id: "stage-0", kind: "NoseCone" },
+    { op: "patch_field", id: "new-1", key: "name", value: "Nose cone" },
+    { op: "patch_field", id: "new-1", key: "length", value: 100 },
+    { op: "patch_field", id: "new-1", key: "aft_radius", value: 16.5 },
+    { op: "patch_field", id: "new-1", key: "thickness", value: 2 },
+    { op: "add_component", parent_id: "stage-0", kind: "BodyTube" },
+    { op: "patch_field", id: "new-2", key: "name", value: "Main body" },
+    { op: "patch_field", id: "new-2", key: "length", value: 450 },
+    { op: "patch_field", id: "new-2", key: "radius", value: 16.5 },
+    { op: "patch_field", id: "new-2", key: "thickness", value: 1 },
+    { op: "add_component", parent_id: "new-2", kind: "InnerTube" },
+    { op: "patch_field", id: "new-3", key: "name", value: "24mm motor mount" },
+    { op: "patch_field", id: "new-3", key: "length", value: 70 },
+    { op: "patch_field", id: "new-3", key: "outer_radius", value: 12.5 },
+    { op: "patch_field", id: "new-3", key: "inner_radius", value: 12 },
+    { op: "patch_field", id: "new-3", key: "motor_mount_present", value: true },
+    {
+      op: "assign_motor",
+      mount_id: "new-3",
+      config_id: "cfg-0",
+      designation: "D12",
+      ejection_delay: 5,
+    },
+    { op: "add_component", parent_id: "new-2", kind: "FinSet" },
+    { op: "patch_field", id: "new-4", key: "name", value: "Fin set" },
+    { op: "patch_field", id: "new-4", key: "axial_method", value: "bottom" },
+    { op: "patch_field", id: "new-4", key: "axial_offset", value: 20 },
+    { op: "patch_field", id: "new-4", key: "root_chord", value: 80 },
+    { op: "patch_field", id: "new-4", key: "tip_chord", value: 35 },
+    { op: "patch_field", id: "new-4", key: "sweep_length", value: 45 },
+    { op: "patch_field", id: "new-4", key: "height", value: 55 },
+    { op: "patch_field", id: "new-4", key: "thickness", value: 3 },
+    { op: "add_component", parent_id: "new-2", kind: "Parachute" },
+    { op: "patch_field", id: "new-5", key: "name", value: "Parachute" },
+    { op: "patch_field", id: "new-5", key: "axial_method", value: "top" },
+    { op: "patch_field", id: "new-5", key: "axial_offset", value: 80 },
+  ];
+  return ops.mcp_edit_apply(bytes, JSON.stringify(editOps));
+}
+
 // ── shared input shapes ─────────────────────────────────────────────────
 
 export const ROCKET_INPUT = {
@@ -388,13 +432,23 @@ export const TOOLS: ToolDef[] = [
   {
     name: "new_document",
     description:
-      "Create a blank rocket (one empty Sustainer stage). Returns ork_b64 to feed into edit_apply / simulate.",
+      "Create a fresh runnable starter rocket with cfg-0, Simulation 1, a 24mm D12 motor mount, fins, and parachute. Returns ork_b64 to feed into inspect / edit_apply / simulate.",
     inputSchema: {},
     handler: async () => {
       try {
-        const bytes = ops.mcp_new_document();
+        const bytes = starterDocumentBytes();
+        const j = JSON.parse(ops.mcp_inspect(bytes));
+        const stab = JSON.parse(ops.mcp_stability(bytes));
         return ok(
-          { ork_b64: Buffer.from(bytes).toString("base64") },
+          {
+            ork_b64: Buffer.from(bytes).toString("base64"),
+            name: j.view?.name,
+            total_length_m: j.view?.total_length,
+            components: (j.view?.components ?? []).length,
+            configs: j.config?.configs,
+            simulations: j.config?.simulations,
+            stability: stab.stability,
+          },
           500_000,
         );
       } catch (e) {

@@ -91,7 +91,7 @@ fn render_rocket(out: &mut String, rocket: &Rocket) {
     for cfg in &rocket.configurations {
         indent(out, 2);
         out.push_str(&format!(
-            "<motorconfiguration configid=\"{}\"{}/>\n",
+            "<motorconfiguration configid=\"{}\"{}>\n",
             xml_escape(&cfg.config_id),
             if rocket.default_config.as_deref() == Some(cfg.config_id.as_str()) {
                 " default=\"true\""
@@ -99,6 +99,15 @@ fn render_rocket(out: &mut String, rocket: &Rocket) {
                 ""
             }
         ));
+        if let Some(name) = &cfg.name {
+            push_text(out, 3, "name", name);
+        }
+        for stage in &cfg.active_stages {
+            indent(out, 3);
+            out.push_str(&format!("<stage number=\"{}\" active=\"true\"></stage>\n", stage));
+        }
+        indent(out, 2);
+        out.push_str("</motorconfiguration>\n");
     }
 
     if !rocket.stages.is_empty() {

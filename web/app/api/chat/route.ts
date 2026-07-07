@@ -61,7 +61,7 @@ function buildSystemPrompt(): string {
     "  - `list_examples` to see bundled rockets",
     "  - `inspect` (with example or ork_b64) for a tree + field keys + sim configs",
     "  - `simulate` for flight numbers; `stability` for CG/CP/margin; `aero_analysis` for per-component aero",
-    "  - `optimize` to sweep a field; `edit_apply` to mutate; `new_document` to start blank",
+    "  - `optimize` to sweep a field; `edit_apply` to mutate; `new_document` to start a fresh runnable starter rocket",
     "  - `list_motors` / `motor_info` for the thrust-curve database",
     "  - `open_in_workbench` whenever the user asks to open/load/show a design — when their workbench is open in another tab, this auto-loads it there",
     "Threading: tools return `ork_b64`; pass it back into the next tool to keep edits stateless. When a tool returns `ork_b64` (e.g. `new_document`, `edit_apply`, `open_in_workbench`, `export`), the user's open Workbench tab auto-loads it — no manual step needed.",
@@ -255,6 +255,8 @@ export async function POST(req: Request) {
         "For ANY tool that accepts a rocket input (ork_b64 / example / ork_url) — inspect, stability, simulate, aero_analysis, mass_breakdown, optimize, edit_apply, export, open_in_workbench, etc. — call it WITHOUT supplying ork_b64/example/ork_url. The server will automatically thread in the workbench's current design. Only specify a rocket input when you explicitly need to target a different design.",
         "",
         "Never paste the workbench's base64 into a tool call yourself — it's hundreds of KB and will be corrupted in transit.",
+        "",
+        "When a tool returns a new design, continue with that returned design. The server tracks the latest returned ork_b64 as the new default for later tool calls in this same turn.",
       ].join("\n"),
     });
   }
@@ -268,6 +270,7 @@ export async function POST(req: Request) {
 
       try {
         let completed = false;
+        let currentRocketB64 = workbench?.ork_b64 ?? null;
         for (let hop = 0; hop < MAX_HOPS; hop++) {
           const stream = await client.chat.completions.create({
             model,
@@ -371,12 +374,12 @@ export async function POST(req: Request) {
             // base64 string through a tool call — so we resolve it for it.
             let execArgs = args;
             if (
-              workbench &&
+              currentRocketB64 &&
               !args.ork_b64 &&
               !args.example &&
               !args.ork_url
             ) {
-              execArgs = { ...args, ork_b64: workbench.ork_b64 };
+              execArgs = { ...args, ork_b64: currentRocketB64 };
             }
 
             if (!tool) {
@@ -407,6 +410,7 @@ export async function POST(req: Request) {
               // JSON.parse.
               const fullText = result.content.map((c) => c.text).join("\n");
               const orkB64 = extractOrkB64(fullText);
+              if (orkB64) currentRocketB64 = orkB64;
               const text = toolResultText(result);
               sdkMessages.push({
                 role: "tool",
