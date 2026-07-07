@@ -26,7 +26,21 @@ export type WorkbenchState = {
 
 const CHANNEL = "opsrocket-workbench";
 
+function channelName(channelId?: string | null): string {
+  return channelId ? `${CHANNEL}:${channelId}` : CHANNEL;
+}
+
 export function useWorkbench(): {
+  state: WorkbenchState | null;
+  loadDesign: (b64: string) => boolean; // returns false if no channel available
+  requestSimulate: () => boolean;
+};
+export function useWorkbench(channelId: string | null | undefined): {
+  state: WorkbenchState | null;
+  loadDesign: (b64: string) => boolean; // returns false if no channel available
+  requestSimulate: () => boolean;
+};
+export function useWorkbench(channelId?: string | null): {
   state: WorkbenchState | null;
   loadDesign: (b64: string) => boolean; // returns false if no channel available
   requestSimulate: () => boolean;
@@ -36,7 +50,7 @@ export function useWorkbench(): {
 
   useEffect(() => {
     if (typeof BroadcastChannel === "undefined") return;
-    const chan = new BroadcastChannel(CHANNEL);
+    const chan = new BroadcastChannel(channelName(channelId));
     chanRef.current = chan;
 
     const onMsg = (e: MessageEvent) => {
@@ -63,7 +77,7 @@ export function useWorkbench(): {
       chan.close();
       chanRef.current = null;
     };
-  }, []);
+  }, [channelId]);
 
   const loadDesign = (b64: string): boolean => {
     const chan = chanRef.current;

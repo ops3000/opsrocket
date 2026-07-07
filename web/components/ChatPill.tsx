@@ -167,6 +167,7 @@ function ToolChip({
 
 export function ChatPill({
   autoApplyDesigns = false,
+  workbenchChannelId = null,
   seed = null,
 }: {
   /**
@@ -176,6 +177,12 @@ export function ChatPill({
    * open workbench tab.
    */
   autoApplyDesigns?: boolean;
+  /**
+   * Scoped BroadcastChannel id for an embedded /workspace iframe. When absent,
+   * chat uses the legacy global channel so homepage chat can still discover an
+   * already-open workbench tab.
+   */
+  workbenchChannelId?: string | null;
   /**
    * Optional grounding context — e.g. the /learn chapter the user is
    * currently reading. When set, the first /api/chat call gets a hidden
@@ -211,7 +218,8 @@ export function ChatPill({
     }
     return null;
   });
-  const { state: workbenchState, loadDesign, requestSimulate } = useWorkbench();
+  const { state: workbenchState, loadDesign, requestSimulate } =
+    useWorkbench(workbenchChannelId);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const dragStartRef = useRef<{ y: number; height: number } | null>(null);

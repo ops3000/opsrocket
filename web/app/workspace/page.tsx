@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { randomUUID } from "node:crypto";
 import { ChatPill } from "@/components/ChatPill";
 
 export const metadata: Metadata = {
@@ -31,6 +32,8 @@ export default async function WorkspacePage({
     const v = sp[k];
     if (typeof v === "string") qs.set(k, v);
   }
+  const channelId = randomUUID();
+  qs.set("wb_channel", channelId);
   const tail = qs.toString();
   const src = tail
     ? `/workspace-app/index.html?${tail}`
@@ -44,7 +47,7 @@ export default async function WorkspacePage({
       />
       <div className="pointer-events-none absolute inset-x-0 bottom-6 z-10 flex justify-center px-4">
         <div className="pointer-events-auto w-full max-w-xl">
-          <ChatPill autoApplyDesigns />
+          <ChatPill autoApplyDesigns workbenchChannelId={channelId} />
         </div>
       </div>
     </div>

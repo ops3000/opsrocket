@@ -173,10 +173,9 @@ function Workbenchful() {
   //   - On boot, look at our own URL (?ork_b64= / ?example= / ?path=) and
   //     auto-load. This is the chat → workbench deeplink entry point.
   //   - postMessage(parent): legacy iframe-embedded mode.
-  //   - BroadcastChannel("opsrocket-workbench"): same-origin cross-tab
-  //     bridge with the chat. Listens for `load_design` and replies to
-  //     `ping` with current state; the wb-broadcast effect below pushes
-  //     fresh state on every successful mutation.
+  //   - BroadcastChannel("opsrocket-workbench[:id]"): same-origin bridge with
+  //     the chat. /workspace passes a scoped `wb_channel` so other open tabs
+  //     cannot leak their current rocket into this page's chat.
   const bcastRef = useRef<BroadcastChannel | null>(null);
   const wbRef = useRef<Workbench | null>(null);
   wbRef.current = wb;
@@ -186,6 +185,10 @@ function Workbenchful() {
     const b64 = params.get("ork_b64");
     const example = params.get("example");
     const path = params.get("path");
+    const wbChannel = params.get("wb_channel");
+    const channelName = wbChannel
+      ? `opsrocket-workbench:${wbChannel}`
+      : "opsrocket-workbench";
     if (b64) loadB64(b64);
     else if (example) loadPath(`/orks/${example}`);
     else if (path) loadPath(path);
@@ -209,7 +212,7 @@ function Workbenchful() {
 
     let chan: BroadcastChannel | null = null;
     if (typeof BroadcastChannel !== "undefined") {
-      chan = new BroadcastChannel("opsrocket-workbench");
+      chan = new BroadcastChannel(channelName);
       bcastRef.current = chan;
       const onChanMsg = (e: MessageEvent) => {
         const m = e.data;
