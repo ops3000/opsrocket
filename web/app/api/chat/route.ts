@@ -21,15 +21,6 @@ export const maxDuration = 300;
 
 const MAX_MESSAGES = 30;
 const MAX_TOTAL_CHARS = 12_000;
-const DEFAULT_MAX_HOPS = 25;
-const MAX_HOPS = Math.min(
-  50,
-  Math.max(
-    1,
-    Number.parseInt(process.env.OPSROCKET_CHAT_MAX_HOPS ?? "", 10) ||
-      DEFAULT_MAX_HOPS,
-  ),
-);
 const TOOL_TIMEOUT_MS = 30_000;
 const TOOL_PREVIEW_CHARS = 500;
 // What we feed back to the model. Has to comfortably fit a typical .ork
@@ -269,9 +260,8 @@ export async function POST(req: Request) {
         controller.enqueue(encoder.encode(JSON.stringify(ev) + "\n"));
 
       try {
-        let completed = false;
         let currentRocketB64 = workbench?.ork_b64 ?? null;
-        for (let hop = 0; hop < MAX_HOPS; hop++) {
+        while (true) {
           const stream = await client.chat.completions.create({
             model,
             // SDK types are stricter than what we accept above; safe at runtime
@@ -323,7 +313,6 @@ export async function POST(req: Request) {
                 d: `\n\n[stopped: model finish reason "${finishReason}"]`,
               });
             }
-            completed = true;
             break;
           }
 
@@ -341,7 +330,6 @@ export async function POST(req: Request) {
               t: "text",
               d: "\n\n[stream error: model returned an incomplete tool call]",
             });
-            completed = true;
             break;
           }
 
@@ -452,14 +440,6 @@ export async function POST(req: Request) {
             }
           }
           // loop again with tool results in history
-        }
-        if (!completed) {
-          emit({
-            t: "text",
-            d:
-              "\n\n[paused: reached this turn's tool-step limit. " +
-              'Send "continue" to keep going from the current design.]',
-          });
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : "unknown";
