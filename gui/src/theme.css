@@ -1172,6 +1172,29 @@ button.link:hover { background: none; color: var(--accent); }
   color-scheme: light;
 }
 
+@media (max-width: 760px) {
+  .metabar,
+  .statbar,
+  footer {
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+
+  .main {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .sidebar,
+  .col-divider,
+  .inspector {
+    display: none;
+  }
+
+  .viewport {
+    min-width: 0;
+  }
+}
+
 footer {
   background: var(--panel);
   border-top: 1px solid var(--line);

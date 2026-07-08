@@ -138,6 +138,63 @@ function glShader(opts: {
   return m;
 }
 
+function makePreviewBackground(): THREE.CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 128;
+  canvas.height = 128;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return new THREE.CanvasTexture(canvas);
+
+  const wash = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+  wash.addColorStop(0, "#fffdf5");
+  wash.addColorStop(0.55, "#f4f7f9");
+  wash.addColorStop(1, "#e7eef2");
+  ctx.fillStyle = wash;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const warmth = ctx.createRadialGradient(
+    canvas.width * 0.8,
+    canvas.height * 0.15,
+    0,
+    canvas.width * 0.8,
+    canvas.height * 0.15,
+    canvas.width * 0.85,
+  );
+  warmth.addColorStop(0, "rgba(254, 243, 199, 0.48)");
+  warmth.addColorStop(1, "rgba(254, 243, 199, 0)");
+  ctx.fillStyle = warmth;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.LinearSRGBColorSpace;
+  return tex;
+}
+
+function makeContrastSilhouette(
+  source: THREE.Group,
+  bin: { dispose(): void }[],
+): THREE.Group {
+  const mat = new THREE.MeshBasicMaterial({
+    color: 0x4e3b25,
+    opacity: 0.2,
+    transparent: true,
+    side: THREE.BackSide,
+    depthTest: true,
+    depthWrite: false,
+  });
+  bin.push(mat);
+
+  const shell = source.clone(true);
+  shell.scale.set(1, 1.035, 1.035);
+  shell.renderOrder = -10;
+  shell.traverse((obj) => {
+    if (!(obj instanceof THREE.Mesh)) return;
+    obj.material = mat;
+    obj.renderOrder = -10;
+  });
+  return shell;
+}
+
 // Attach a texture (decal / default class texture) — GL_MODULATE.
 function setMap(m: THREE.ShaderMaterial, tex: THREE.Texture) {
   m.uniforms.uMap.value = tex;
@@ -603,9 +660,17 @@ export function RocketView3D({
     THREE.ColorManagement.enabled = false;
 
     const scene = new THREE.Scene();
-    scene.background = keyBg
-      ? new THREE.Color(1, 0, 1) // chroma key for colour-invariant masks
-      : new THREE.Color(0xfe / 255, 0xf3 / 255, 0xc7 / 255);
+    const sceneBin: { dispose(): void }[] = [];
+    const previewContrast = raw == null && !keyBg && mode === "finished";
+    if (keyBg) {
+      scene.background = new THREE.Color(1, 0, 1); // chroma key for masks
+    } else if (previewContrast) {
+      const bg = makePreviewBackground();
+      scene.background = bg;
+      sceneBin.push(bg);
+    } else {
+      scene.background = new THREE.Color(0xfe / 255, 0xf3 / 255, 0xc7 / 255);
+    }
 
     // preserveDrawingBuffer so File ▸ Export ▸ Design image (PNG) can read
     // the framebuffer back via canvas.toDataURL() at any time.
@@ -647,6 +712,7 @@ export function RocketView3D({
     key.target.position.set(0, 0, 0);
 
     const { group: rocket, bin } = buildRocketGroup(rv, mode);
+    if (previewContrast) scene.add(makeContrastSilhouette(rocket, sceneBin));
     scene.add(rocket);
 
     rocket.updateWorldMatrix(true, true);
@@ -654,6 +720,7 @@ export function RocketView3D({
     if (box.isEmpty()) {
       renderer.render(scene, camera);
       return () => {
+        sceneBin.forEach((d) => d.dispose());
         bin.forEach((d) => d.dispose());
         renderer.dispose();
         mount.removeChild(renderer.domElement);
@@ -727,6 +794,7 @@ export function RocketView3D({
       rraf = requestAnimationFrame(tick);
       return () => {
         cancelAnimationFrame(rraf);
+        sceneBin.forEach((d) => d.dispose());
         bin.forEach((d) => d.dispose());
         renderer.dispose();
         mount.removeChild(renderer.domElement);
@@ -835,6 +903,7 @@ export function RocketView3D({
       cancelAnimationFrame(raf);
       ro.disconnect();
       controls.dispose();
+      sceneBin.forEach((d) => d.dispose());
       bin.forEach((d) => d.dispose());
       renderer.dispose();
       mount.removeChild(renderer.domElement);

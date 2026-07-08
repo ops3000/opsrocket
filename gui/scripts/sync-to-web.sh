@@ -18,6 +18,10 @@ rsync -a --delete \
   --exclude '__nothing__' \
   dist/ "$DEST/"
 
+ROOT_TEXTURES="../web/public/textures"
+mkdir -p "$ROOT_TEXTURES"
+rsync -a --delete dist/textures/ "$ROOT_TEXTURES/"
+
 INDEX="$DEST/index.html"
 # Rewrite Vite's default /assets/ → /workspace-app/assets/ and prepend the
 # shim. Idempotent: the shim line is only injected if not already present.
