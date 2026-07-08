@@ -173,10 +173,12 @@ function makePreviewBackground(): THREE.CanvasTexture {
 function makeContrastSilhouette(
   source: THREE.Group,
   bin: { dispose(): void }[],
+  opacity = 0.2,
+  radialScale = 1.035,
 ): THREE.Group {
   const mat = new THREE.MeshBasicMaterial({
     color: 0x4e3b25,
-    opacity: 0.2,
+    opacity,
     transparent: true,
     side: THREE.BackSide,
     depthTest: true,
@@ -185,7 +187,7 @@ function makeContrastSilhouette(
   bin.push(mat);
 
   const shell = source.clone(true);
-  shell.scale.set(1, 1.035, 1.035);
+  shell.scale.set(1, radialScale, radialScale);
   shell.renderOrder = -10;
   shell.traverse((obj) => {
     if (!(obj instanceof THREE.Mesh)) return;
@@ -661,7 +663,7 @@ export function RocketView3D({
 
     const scene = new THREE.Scene();
     const sceneBin: { dispose(): void }[] = [];
-    const previewContrast = raw == null && !keyBg && mode === "finished";
+    const previewContrast = raw == null && !keyBg && mode !== "figure";
     if (keyBg) {
       scene.background = new THREE.Color(1, 0, 1); // chroma key for masks
     } else if (previewContrast) {
@@ -712,7 +714,16 @@ export function RocketView3D({
     key.target.position.set(0, 0, 0);
 
     const { group: rocket, bin } = buildRocketGroup(rv, mode);
-    if (previewContrast) scene.add(makeContrastSilhouette(rocket, sceneBin));
+    if (previewContrast) {
+      scene.add(
+        makeContrastSilhouette(
+          rocket,
+          sceneBin,
+          mode === "unfinished" ? 0.12 : 0.2,
+          mode === "unfinished" ? 1.025 : 1.035,
+        ),
+      );
+    }
     scene.add(rocket);
 
     rocket.updateWorldMatrix(true, true);
